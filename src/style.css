@@ -1,0 +1,197 @@
+/*
+  Design system: US highway signage (MUTCD) applied to a lab tool.
+  Overpass is an open-source revival of Highway Gothic, the typeface on US road signs.
+  Green guide signs carry identity and progress; the road is asphalt with real lane paint;
+  orange is reserved for construction-sign actions and crashes.
+*/
+:root {
+  --asphalt: #2b2e30;
+  --asphalt-deep: #222527;
+  --verge: #1b1e1f;
+  --shoulder: #3a3e41;
+  --concrete: #9aa1a5;
+  --marking-white: #f3f3ee;
+  --marking-yellow: #f6c21b;
+  --sign-green: #0b6a43;
+  --sign-blue: #3b7bd6;
+  --construction: #f2701f;
+  --ink-muted: #b9bfc2;
+
+  --radius-sign: 12px;
+  --radius-control: 8px;
+  --font: "Overpass", "Highway Gothic", system-ui, sans-serif;
+
+  color-scheme: dark;
+}
+
+* { box-sizing: border-box; }
+html, body { height: 100%; margin: 0; }
+body {
+  background: var(--asphalt-deep);
+  color: var(--marking-white);
+  font: 400 15px/1.5 var(--font);
+  font-variant-numeric: tabular-nums;
+  -webkit-font-smoothing: antialiased;
+}
+
+.app {
+  display: grid;
+  grid-template-columns: minmax(300px, 1fr) minmax(320px, 400px);
+  height: 100%;
+}
+
+/* Road: the hero. Asphalt with soft shoulders either side. */
+.road-panel {
+  position: relative;
+  background: var(--verge);
+  overflow: hidden;
+}
+#road { display: block; width: 100%; height: 100%; outline: none; }
+#road:focus-visible { box-shadow: inset 0 0 0 3px var(--marking-yellow); }
+
+.rail {
+  display: flex;
+  flex-direction: column;
+  gap: 14px;
+  padding: 18px;
+  overflow-y: auto;
+  border-left: 1px solid var(--shoulder);
+}
+
+/* Guide signs: green field, white inset border, rounded corners. */
+.sign {
+  position: relative;
+  background: var(--sign-green);
+  border-radius: var(--radius-sign);
+  padding: 18px 20px;
+  box-shadow: inset 0 0 0 4px var(--sign-green), inset 0 0 0 6px var(--marking-white);
+}
+.sign--title h1 {
+  margin: 0 0 6px;
+  font-size: 34px;
+  line-height: 1.05;
+  font-weight: 800;
+  letter-spacing: -0.01em;
+}
+.sign--title p { margin: 0; color: #e3efe8; max-width: 38ch; }
+
+/* Progress laid out like a distance sign: name left, number right. */
+.sign--guide dl { margin: 0; display: grid; gap: 4px; }
+.sign--guide dl div {
+  display: flex;
+  justify-content: space-between;
+  align-items: baseline;
+  gap: 12px;
+}
+.sign--guide dt { font-weight: 600; font-size: 17px; }
+.sign--guide dd { margin: 0; font-weight: 800; font-size: 22px; }
+
+.panel {
+  background: var(--asphalt);
+  border-radius: var(--radius-control);
+  padding: 16px;
+}
+.panel h2 { margin: 0; font-size: 16px; font-weight: 800; }
+.panel-head { display: flex; justify-content: space-between; align-items: baseline; gap: 8px; }
+
+.legend { margin: 0; font-size: 13px; color: var(--ink-muted); display: flex; align-items: center; gap: 6px; }
+.swatch { display: inline-block; width: 14px; height: 3px; border-radius: 2px; }
+.swatch--pos { background: var(--marking-yellow); }
+.swatch--neg { background: var(--sign-blue); margin-left: 6px; }
+
+#brain { display: block; width: 100%; height: 200px; margin-top: 8px; }
+
+.controls { display: grid; gap: 16px; }
+
+.field { display: grid; gap: 6px; }
+.field-label { display: flex; justify-content: space-between; font-weight: 600; }
+.field-label output { font-weight: 800; color: var(--marking-yellow); }
+
+input[type="range"] {
+  appearance: none;
+  width: 100%;
+  height: 28px;
+  background: transparent;
+  cursor: pointer;
+}
+/* Track drawn as a dashed lane line. */
+input[type="range"]::-webkit-slider-runnable-track {
+  height: 4px;
+  background: repeating-linear-gradient(90deg, rgba(243, 243, 238, 0.5) 0 14px, transparent 14px 24px);
+}
+input[type="range"]::-moz-range-track {
+  height: 4px;
+  background: repeating-linear-gradient(90deg, rgba(243, 243, 238, 0.5) 0 14px, transparent 14px 24px);
+}
+input[type="range"]::-webkit-slider-thumb {
+  appearance: none;
+  width: 16px;
+  height: 26px;
+  margin-top: -11px;
+  border-radius: 4px;
+  background: var(--marking-yellow);
+  border: 2px solid var(--asphalt-deep);
+}
+input[type="range"]::-moz-range-thumb {
+  width: 14px;
+  height: 24px;
+  border-radius: 4px;
+  background: var(--marking-yellow);
+  border: 2px solid var(--asphalt-deep);
+}
+input[type="range"]:focus-visible { outline: 2px solid var(--marking-yellow); outline-offset: 4px; border-radius: 4px; }
+
+.segmented { border: 0; margin: 0; padding: 0; display: flex; gap: 6px; align-items: center; }
+.segmented legend { float: left; font-weight: 600; margin-right: auto; padding: 0; }
+.segmented label { position: relative; }
+.segmented input { position: absolute; opacity: 0; inset: 0; cursor: pointer; }
+.segmented span {
+  display: block;
+  min-width: 44px;
+  padding: 6px 10px;
+  text-align: center;
+  border-radius: var(--radius-control);
+  border: 1.5px solid var(--shoulder);
+  font-weight: 800;
+}
+.segmented input:checked + span { background: var(--marking-white); color: var(--asphalt-deep); border-color: var(--marking-white); }
+.segmented input:focus-visible + span { outline: 2px solid var(--marking-yellow); outline-offset: 2px; }
+
+.toggle { display: flex; align-items: center; gap: 10px; font-weight: 600; cursor: pointer; }
+.toggle input { width: 18px; height: 18px; accent-color: var(--marking-yellow); }
+
+.actions { display: grid; grid-template-columns: 1fr 1fr; gap: 8px; }
+.btn {
+  font: 800 14px/1 var(--font);
+  padding: 12px 12px 10px;
+  border-radius: var(--radius-control);
+  border: 1.5px solid var(--marking-white);
+  background: transparent;
+  color: var(--marking-white);
+  cursor: pointer;
+}
+.btn:hover { background: rgba(243, 243, 238, 0.08); }
+.btn:focus-visible { outline: 2px solid var(--marking-yellow); outline-offset: 2px; }
+.btn:disabled { opacity: 0.4; cursor: not-allowed; }
+/* Construction orange: the one action that changes the run in progress. */
+.btn--primary { background: var(--construction); border-color: var(--construction); color: #1a1a1a; }
+.btn--primary:hover { background: #ff8436; }
+.btn--quiet { border-color: var(--shoulder); color: var(--ink-muted); }
+.btn[aria-pressed="true"] { background: var(--marking-yellow); border-color: var(--marking-yellow); color: #1a1a1a; }
+
+.status { margin: 0; color: var(--ink-muted); font-size: 14px; min-height: 2.4em; }
+
+.visually-hidden {
+  position: absolute; width: 1px; height: 1px; overflow: hidden; clip: rect(0 0 0 0); white-space: nowrap;
+}
+
+@media (max-width: 760px) {
+  .app { grid-template-columns: 1fr; height: auto; }
+  .road-panel { height: 62vh; }
+  .rail { border-left: 0; padding: 14px 16px 24px; }
+  .sign--title h1 { font-size: 28px; }
+}
+
+@media (prefers-reduced-motion: reduce) {
+  * { transition: none !important; }
+}

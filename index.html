@@ -1,0 +1,82 @@
+<!doctype html>
+<html lang="en">
+  <head>
+    <meta charset="UTF-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1" />
+    <title>Self-Driving Car</title>
+    <meta name="description" content="A population of cars learns to drive with a tiny neural network and a genetic algorithm." />
+    <link rel="preconnect" href="https://fonts.googleapis.com" />
+    <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin />
+    <link href="https://fonts.googleapis.com/css2?family=Overpass:wght@400;600;800&display=swap" rel="stylesheet" />
+  </head>
+  <body>
+    <div class="app">
+      <main class="road-panel">
+        <canvas id="road" tabindex="0" aria-label="Simulation: the leading car is yellow, other cars in its generation are faint white, traffic is grey."></canvas>
+      </main>
+
+      <aside class="rail">
+        <header class="sign sign--title">
+          <h1>Self-driving car</h1>
+          <p>Every car gets the same small neural network. After each run, the car that drove farthest is copied and mutated to breed the next generation.</p>
+        </header>
+
+        <section class="sign sign--guide" aria-label="Progress">
+          <dl>
+            <div><dt>Generation</dt><dd id="stat-generation">1</dd></div>
+            <div><dt>Still driving</dt><dd id="stat-alive">0</dd></div>
+            <div><dt>This run</dt><dd id="stat-run">0 m</dd></div>
+            <div><dt>Best so far</dt><dd id="stat-best">None yet</dd></div>
+          </dl>
+        </section>
+
+        <section class="panel brain" aria-labelledby="brain-title">
+          <div class="panel-head">
+            <h2 id="brain-title">Leader's brain</h2>
+            <p id="brain-note" class="legend">
+              <span class="swatch swatch--pos"></span>Excites
+              <span class="swatch swatch--neg"></span>Inhibits
+            </p>
+          </div>
+          <canvas id="brain" aria-label="Neural network of the leading car. Five sensor inputs at the bottom, six hidden neurons, four outputs at the top: forward, left, right, reverse."></canvas>
+        </section>
+
+        <section class="panel controls" aria-labelledby="controls-title">
+          <h2 id="controls-title" class="visually-hidden">Controls</h2>
+
+          <label class="field">
+            <span class="field-label">Cars per generation <output id="population-out" for="population">200</output></span>
+            <input id="population" type="range" min="10" max="600" step="10" value="200" />
+          </label>
+
+          <label class="field">
+            <span class="field-label">Mutation <output id="mutation-out" for="mutation">15%</output></span>
+            <input id="mutation" type="range" min="0" max="0.5" step="0.01" value="0.15" />
+          </label>
+
+          <fieldset id="speed" class="segmented">
+            <legend>Sim speed</legend>
+            <label><input type="radio" name="speed" value="1" checked /><span>1×</span></label>
+            <label><input type="radio" name="speed" value="3" /><span>3×</span></label>
+            <label><input type="radio" name="speed" value="8" /><span>8×</span></label>
+          </fieldset>
+
+          <label class="toggle">
+            <input id="sensors" type="checkbox" checked />
+            <span>Show the leader's sensors</span>
+          </label>
+
+          <div class="actions">
+            <button id="next" class="btn btn--primary" type="button">Next generation</button>
+            <button id="drive" class="btn" type="button" aria-pressed="false">Drive it yourself</button>
+            <button id="download" class="btn btn--quiet" type="button">Copy brain JSON</button>
+            <button id="forget" class="btn btn--quiet" type="button">Reset learning</button>
+          </div>
+        </section>
+
+        <p id="status" class="status" role="status" aria-live="polite">Generation 1 starts from random brains. Give it a few runs.</p>
+      </aside>
+    </div>
+    <script type="module" src="/src/main.ts"></script>
+  </body>
+</html>

@@ -1,0 +1,20 @@
+{
+  "name": "self-driving-car",
+  "version": "1.0.0",
+  "private": true,
+  "type": "module",
+  "description": "A population of cars learns to drive with a tiny neural network and a genetic algorithm. TypeScript + Canvas.",
+  "scripts": {
+    "dev": "vite",
+    "build": "tsc --noEmit && vite build",
+    "preview": "vite preview",
+    "test": "vitest run",
+    "typecheck": "tsc --noEmit"
+  },
+  "devDependencies": {
+    "typescript": "^7.0.2",
+    "vite": "^8.3.4",
+    "vite-plugin-singlefile": "^2.3.3",
+    "vitest": "^5.0.4"
+  }
+}
