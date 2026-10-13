@@ -33,6 +33,21 @@ export interface WorldLevel {
 }
 
 export const LEVELS_PER_MAP = 3;
+
+/**
+ * Training on a map the visitor drew or imported: one timed trip a generation from their Start
+ * marking to their Target marking (or the farthest road, without one). There are no levels here,
+ * and the page puts the level brains back when the visitor returns to the levels.
+ */
+export const CUSTOM_LEVEL: WorldLevel = {
+  number: 0,
+  name: "Your map",
+  map: -1,
+  goal: "every",
+  minTrip: 0,
+  timeFactor: 2,
+  randomStart: false,
+};
 /** The tightest clock: 30% over the ideal time, plus the allowances, stays drivable. */
 const MIN_TIME_FACTOR = 1.3;
 const DISTANCE_NAMES = ["Around the block", "Short trips", "Across the neighborhood", "Across town", "Long trips", "Cross-town runs"];
@@ -151,6 +166,8 @@ export class WorldSim {
   /** Called when a level starts on a different map, so the page can load it before cars spawn. */
   onMapChange?: (map: number) => void;
   private currentMap = 0;
+  /** True while training on the visitor's own map instead of the levels. */
+  custom = false;
   destination: Point | null = null;
   /** Where this generation starts and which way it faces. */
   origin: { center: Point; direction: Point } | null = null;
@@ -168,25 +185,28 @@ export class WorldSim {
   private goalReached = false;
 
   constructor(private world: () => World, saved: WorldSaved | null = null) {
-    if (saved) {
-      this.neat = Neat.fromJSON(saved.neat);
-      this.level = Math.max(1, saved.level);
-      if (saved.seed !== undefined) this.seed = saved.seed;
-      this.currentMap = this.levelSpec.map;
-      this.generation = saved.generation;
-      this.history = saved.history ?? [];
-      this.last = this.history[this.history.length - 1] ?? null;
-    } else {
-      this.neat = new Neat(WORLD_INPUTS, OUTPUTS, this.population);
-    }
+    this.neat = new Neat(WORLD_INPUTS, OUTPUTS, this.population);
+    if (saved) this.restore(saved);
+  }
+
+  /** Puts back a saved state: the population, level, generation and learning curve. */
+  restore(saved: WorldSaved): void {
+    this.neat = Neat.fromJSON(saved.neat);
+    this.neat.rates.power = this.mutation * 5;
+    this.level = Math.max(1, saved.level);
+    if (saved.seed !== undefined) this.seed = saved.seed;
+    this.currentMap = worldLevelSpec(this.level).map;
+    this.generation = saved.generation;
+    this.history = saved.history ?? [];
+    this.last = this.history[this.history.length - 1] ?? null;
   }
 
   get tripsPerGeneration(): number {
-    return this.levelSpec.goal === "survive" ? 1 : TRIPS_PER_GENERATION;
+    return this.custom || this.levelSpec.goal === "survive" ? 1 : TRIPS_PER_GENERATION;
   }
 
   get levelSpec(): WorldLevel {
-    return worldLevelSpec(this.level);
+    return this.custom ? CUSTOM_LEVEL : worldLevelSpec(this.level);
   }
 
   get start(): Marking | undefined {
@@ -236,6 +256,11 @@ export class WorldSim {
     const spec = this.levelSpec;
     const rand = mulberry32((this.generation * 7919 + this.level * 31 + this.trip * 104729) >>> 0);
     const marking = this.start!;
+    if (this.custom) {
+      this.origin = { center: marking.center, direction: marking.direction };
+      this.destination = this.customDestination(this.origin.center);
+      return;
+    }
     this.origin = spec.randomStart ? this.randomRoadSpot(rand) : { center: marking.center, direction: marking.direction };
     const from = new Navigator(w.graph, this.origin.center);
     let reach = 0;
@@ -256,6 +281,24 @@ export class WorldSim {
       if (!best || d > best.d) best = { p, d };
     }
     this.destination = best?.p ?? null;
+  }
+
+  /** The visitor's Target marking, or without one the road point farthest from the start. */
+  private customDestination(from: Point): Point | null {
+    const w = this.world();
+    const target = w.markings.find((m) => m.type === "target");
+    if (target) return target.center;
+    const nav = new Navigator(w.graph, from);
+    let far: Point | null = null;
+    let reach = 0;
+    w.graph.points.forEach((p, i) => {
+      const d = nav.distanceFrom(i);
+      if (d < Infinity && d > reach) {
+        reach = d;
+        far = p;
+      }
+    });
+    return far;
   }
 
   /**
@@ -313,7 +356,7 @@ export class WorldSim {
   }
 
   private startGeneration(): void {
-    if (this.levelSpec.map !== this.currentMap) {
+    if (!this.custom && this.levelSpec.map !== this.currentMap) {
       this.currentMap = this.levelSpec.map;
       this.onMapChange?.(this.currentMap);
     }
@@ -452,13 +495,13 @@ export class WorldSim {
     const best = this.totals.indexOf(Math.max(...this.totals));
     const bestCar = this.cars[best];
     const arrivedAt = bestCar ? this.trips.get(bestCar)?.arrivedAt : undefined;
-    if (this.levelSpec.goal === "every") this.goalReached = this.arrivals.some((a) => a >= this.tripsPerGeneration);
+    if (this.levelSpec.goal === "every" && !this.custom) this.goalReached = this.arrivals.some((a) => a >= this.tripsPerGeneration);
     this.neat.evolve(this.totals);
     const champ = this.neat.champion!;
     const levelUp = this.goalReached;
     this.last = {
       generation: this.generation,
-      level: this.level,
+      level: this.custom ? 0 : this.level,
       best: this.totals[best] ?? 0,
       grew: champ.hiddenCount > before,
       levelUp,
@@ -472,21 +515,27 @@ export class WorldSim {
     };
     this.history.push(this.last);
     if (this.history.length > 300) this.history.shift();
-    if (levelUp) this.level++;
+    if (levelUp && !this.custom) this.level++;
     this.generation++;
     this.startGeneration();
   }
 
-  /** The map changed: keep the brains, start the levels over. */
-  restartLevels(): void {
-    this.level = 1;
+  /**
+   * Switches to training on the visitor's own map. The brains carry over as a starting point;
+   * the page keeps a copy of the level state and restores it afterwards.
+   */
+  startCustom(): void {
+    this.custom = true;
+    this.generation = 1;
+    this.history = [];
+    this.last = null;
   }
 
   forget(): void {
     this.neat = new Neat(WORLD_INPUTS, OUTPUTS, this.population);
     this.neat.rates.power = this.mutation * 5;
     this.generation = 1;
-    this.level = 1;
+    if (!this.custom) this.level = 1;
     this.history = [];
     this.last = null;
     if (this.mode !== "off") this.startGeneration();

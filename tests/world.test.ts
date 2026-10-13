@@ -217,6 +217,48 @@ describe("world levels and navigation", () => {
   });
 });
 
+describe("training on the visitor's own map", () => {
+  it("drives one timed trip to the Target marking and never changes level", () => {
+    const w = sampleWorld();
+    w.markings = w.markings.filter((m) => m.type !== "target");
+    const lane = w.laneGuides[w.laneGuides.length - 1];
+    const target = { x: (lane.p1.x + lane.p2.x) / 2, y: (lane.p1.y + lane.p2.y) / 2 };
+    const marking = createMarking("target", target, lane.directionVector(), w.settings.roadWidth);
+    w.markings.push(marking);
+    const sim = new WorldSim(() => w);
+    sim.population = 4;
+    sim.level = 5;
+    sim.startCustom();
+    expect(sim.begin("AI")).toBe(true);
+    expect(sim.tripsPerGeneration).toBe(1);
+    expect(sim.destination).toEqual(marking.center);
+    expect(sim.timeLimit).toBeGreaterThan(0);
+    while (sim.generation === 1) sim.step();
+    expect(sim.level).toBe(5);
+    expect(sim.last!.level).toBe(0);
+  });
+
+  it("heads for the farthest road without a Target, and restores the level brains afterwards", () => {
+    const w = sampleWorld();
+    w.markings = w.markings.filter((m) => m.type !== "target");
+    const sim = new WorldSim(() => w);
+    sim.population = 4;
+    sim.level = 4;
+    const levels = sim.toJSON();
+    const champion = JSON.stringify(levels.neat);
+    sim.startCustom();
+    sim.begin("AI");
+    expect(sim.destination).not.toBeNull();
+    for (let g = 0; g < 3; g++) sim.nextGeneration();
+    expect(JSON.stringify(sim.neat.toJSON())).not.toBe(champion);
+    sim.stop();
+    sim.custom = false;
+    sim.restore(levels);
+    expect(sim.level).toBe(4);
+    expect(JSON.stringify(sim.neat.toJSON())).toBe(champion);
+  });
+});
+
 describe("timed world levels", () => {
   it("never run out, never tighten the clock past what is drivable, and change map every three levels", async () => {
     const { worldLevelSpec } = await import("../src/world/sim");

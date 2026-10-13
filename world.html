@@ -21,6 +21,7 @@
           </div>
           <canvas id="minimap" width="180" height="180" aria-label="Minimap"></canvas>
         </div>
+        <p id="osm-credit" class="map-credit" hidden>Map data © <a href="https://www.openstreetmap.org/copyright" target="_blank" rel="noopener">OpenStreetMap contributors</a>, ODbL</p>
       </main>
 
       <aside class="rail">
@@ -102,6 +103,7 @@
             <button id="drive-self" class="btn" type="button">Drive it yourself</button>
             <button id="stop-driving" class="btn btn--quiet" type="button" disabled>Park and edit</button>
             <button id="forget" class="btn btn--quiet" type="button">Reset learning</button>
+            <button id="back-to-levels" class="btn btn--span" type="button" hidden>Back to the levels</button>
           </div>
         </section>
 
@@ -110,6 +112,7 @@
             <h2 id="map-title">Map file</h2>
             <span class="legend">Saves in this browser as you edit</span>
           </div>
+          <p class="help help--quiet">Draw on the map or bring in your own to train on it. Training there never changes the level brains.</p>
           <div class="actions">
             <label class="btn file-btn">
               <input id="import" type="file" accept=".json,.world,application/json" />
@@ -130,6 +133,31 @@
             <pre id="overpass-query" tabindex="0"></pre>
             <button id="copy-query" class="btn btn--quiet" type="button">Copy query</button>
           </details>
+        </section>
+
+        <section class="panel controls" aria-labelledby="my-maps-title">
+          <div class="panel-head">
+            <h2 id="my-maps-title">My maps</h2>
+            <span class="legend">Kept in this browser</span>
+          </div>
+          <label class="field">
+            <span class="field-label">Saved maps</span>
+            <select id="my-maps" class="select"></select>
+          </label>
+          <div class="actions">
+            <button id="open-map" class="btn" type="button">Open</button>
+            <button id="delete-map" class="btn btn--quiet" type="button">Delete</button>
+          </div>
+          <label class="field">
+            <span class="field-label">Name this map</span>
+            <input id="map-name" class="text-input" type="text" maxlength="40" placeholder="My town" autocomplete="off" />
+          </label>
+          <label class="toggle" id="share-row" hidden>
+            <input id="share-map" type="checkbox" />
+            <span>Also share it with the developer for inspiration</span>
+          </label>
+          <p id="share-help" class="help help--quiet" hidden>Only the roads and markings are sent, never your name or email. Leave it unchecked to keep the map in this browser only.</p>
+          <button id="save-map" class="btn btn--primary" type="button">Save to My maps</button>
         </section>
 
         <p id="status" class="status" role="status" aria-live="polite">Sample town loaded. Pick a tool, or press Train the cars.</p>

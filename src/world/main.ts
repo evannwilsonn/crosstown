@@ -7,7 +7,8 @@ import { isOsmData, OVERPASS_QUERY, parseOsm } from "./osm";
 import { sampleWorld } from "./sample";
 import { WORLD_INPUTS, WorldSim, type WorldSaved } from "./sim";
 import { generateMap } from "./mapgen";
-import { WORLD_THEMES } from "./worldThemes";
+import { WORLD_THEMES, type WorldThemeName } from "./worldThemes";
+import { MAX_SHARE_BYTES, startSharing, type Sharing } from "./share";
 import { drawLearningCurve } from "../chart";
 import { Genome } from "../neat";
 import { Viewport } from "./viewport";
@@ -17,6 +18,10 @@ import { World, type CourseSave, type WorldJSON, type WorldPaint } from "./world
 const WORLD_KEY = "sdc.world.v1";
 // NEAT replaced the fixed network; the whole population and level are saved.
 const STATE_KEY = "sdc.world.neat.v1";
+/** Present while training on the visitor's own map: holds the level state to put back afterwards. */
+const CUSTOM_KEY = "sdc.world.custom.v1";
+/** The visitor's saved maps. */
+const MAPS_KEY = "sdc.world.maps.v1";
 /** Max speed runs as many steps as fit in this much of each frame. */
 const MAX_BUDGET_MS = 14;
 const PX_PER_METER = 10;
@@ -54,6 +59,16 @@ const ui = {
   driveSelf: $<HTMLButtonElement>("#drive-self"),
   stop: $<HTMLButtonElement>("#stop-driving"),
   forget: $<HTMLButtonElement>("#forget"),
+  backToLevels: $<HTMLButtonElement>("#back-to-levels"),
+  osmCredit: $("#osm-credit"),
+  myMaps: $<HTMLSelectElement>("#my-maps"),
+  openMap: $<HTMLButtonElement>("#open-map"),
+  deleteMap: $<HTMLButtonElement>("#delete-map"),
+  mapName: $<HTMLInputElement>("#map-name"),
+  shareRow: $("#share-row"),
+  shareMap: $<HTMLInputElement>("#share-map"),
+  shareHelp: $("#share-help"),
+  saveMap: $<HTMLButtonElement>("#save-map"),
   importFile: $<HTMLInputElement>("#import"),
   copyJson: $<HTMLButtonElement>("#copy-json"),
   sample: $<HTMLButtonElement>("#sample"),
@@ -109,13 +124,40 @@ function save(key: string, value: unknown, store: "local" | "session" = "local")
   }
 }
 
-const savedView = load<WorldJSON>(WORLD_KEY)?.view;
+/** Where a map came from: OpenStreetMap data needs its credit shown. */
+type MapSource = "osm" | "drawn";
+interface SavedWorld extends WorldJSON {
+  source?: MapSource;
+  theme?: WorldThemeName;
+}
+interface CustomSession {
+  /** The level state when the visitor switched to their own map; null after Reset learning. */
+  levels: WorldSaved | null;
+}
+interface MyMap {
+  id: string;
+  name: string;
+  savedAt: number;
+  map: SavedWorld;
+}
+
+const savedView = load<SavedWorld>(WORLD_KEY)?.view;
+let custom = load<CustomSession>(CUSTOM_KEY, "session");
+let mapSource: MapSource = "drawn";
+
+function worldFrom(saved: SavedWorld): World {
+  const w = World.fromJSON(saved);
+  if (saved.theme && saved.theme in WORLD_THEMES) w.theme = saved.theme;
+  return w;
+}
 
 function initialWorld(): World {
-  const saved = load<WorldJSON>(WORLD_KEY);
+  const saved = load<SavedWorld>(WORLD_KEY);
   if (saved?.graph) {
     try {
-      return World.fromJSON(saved);
+      const w = worldFrom(saved);
+      mapSource = saved.source ?? "drawn";
+      return w;
     } catch {
       /* fall through to the sample */
     }
@@ -141,6 +183,13 @@ try {
 } catch {
   sim = new WorldSim(() => world);
 }
+if (custom) {
+  // Refreshed while training on the visitor's own map: it carries on there.
+  const own = sim.generation > 1 ? { generation: sim.generation, history: sim.history, last: sim.last } : null;
+  if (!own && custom.levels) sim.restore(custom.levels);
+  sim.startCustom();
+  if (own) Object.assign(sim, own);
+}
 // Every three levels the town changes; the brains carry over.
 sim.onMapChange = (map) => showLevelMap(map);
 function saveState(): void {
@@ -156,11 +205,11 @@ const HELP: Record<string, string> = {
   roads: "Click empty ground to add an intersection. Click another to connect them. Drag to move one, right-click to delete it.",
   stop: "Hover a lane and click to paint a stop line. Right-click a marking to remove it.",
   yield: "Hover a lane and click to paint yield triangles. Right-click a marking to remove it.",
-  light: "Click a lane before an intersection to add a signal. Cars treat red and yellow as a wall.",
+  light: "Click a lane before an intersection to add a signal. Cars treat a red light as a wall.",
   crossing: "Hover a road and click to paint a crosswalk across both lanes.",
   parking: "Hover a lane and click to paint a parking bay.",
   start: "Click a lane to set where cars spawn and which way they face. The first start marking is used.",
-  target: "Click a lane to mark the destination for levels 1 and 2. Without one, cars head for the farthest road.",
+  target: "Click a lane to mark where cars should drive to on your map. Without one, they head for the farthest road. The levels pick their own destinations.",
 };
 
 function setTool(tool: string): void {
@@ -193,6 +242,8 @@ let markingCount = -1;
 function regenerate(now: number): void {
   const v = world.graph.version;
   if (v !== seenVersion) {
+    // Editing a level map makes it the visitor's own design.
+    if (levelMapShown) madeOwn();
     seenVersion = v;
     lastChange = now;
     world.generateRoads();
@@ -204,6 +255,7 @@ function regenerate(now: number): void {
     saveWorld();
   }
   if (world.markings.length !== markingCount) {
+    if (levelMapShown && markingCount >= 0) madeOwn();
     markingCount = world.markings.length;
     saveWorld();
   }
@@ -216,22 +268,74 @@ let levelMapShown = false;
 function showLevelMap(map: number): void {
   world = generateMap(map, sim.seed);
   levelMapShown = true;
+  setSource("drawn");
   markingCount = world.markings.length;
   seenVersion = world.graph.version;
   if (!sim.leader) viewport.fit(world.graph.points);
 }
 
-function saveWorld(): void {
-  if (levelMapShown) return; // level maps are made fresh each session; only the visitor's own map is kept
-  save(WORLD_KEY, { ...world.toJSON(), view: { zoom: viewport.zoom, center: viewport.center } });
+function currentMap(): SavedWorld {
+  return { ...world.toJSON(), source: mapSource, theme: world.theme };
 }
 
-function replaceWorld(next: World, msg: string, view?: { zoom: number; center: { x: number; y: number } }): void {
+function saveWorld(): void {
+  if (levelMapShown) return; // level maps are made fresh each session; only the visitor's own map is kept
+  save(WORLD_KEY, { ...currentMap(), view: { zoom: viewport.zoom, center: viewport.center } });
+}
+
+/** OpenStreetMap's licence asks for credit wherever its data is shown. */
+function setSource(source: MapSource): void {
+  mapSource = source;
+  ui.osmCredit.hidden = source !== "osm";
+}
+
+/**
+ * Switches to training on the visitor's own map. The level state is kept aside so that
+ * nothing learned here changes the level brains; Back to the levels puts it back.
+ */
+function enterCustom(): void {
+  levelMapShown = false;
+  if (!sim.custom) {
+    custom = { levels: sim.toJSON() };
+    save(CUSTOM_KEY, custom, "session");
+  }
+  sim.startCustom();
+  saveState();
+  updateMode();
+}
+
+function madeOwn(): void {
+  enterCustom();
+  announce(`This map is yours now. ${describeLevel()}`);
+}
+
+function backToLevels(): void {
+  stopDriving();
+  saveWorld();
+  sim.custom = false;
+  if (custom?.levels) sim.restore(custom.levels);
+  else sim.forget();
+  custom = null;
+  save(CUSTOM_KEY, null, "session");
+  saveState();
+  showLevelMap(sim.levelSpec.map);
+  viewport.fit(world.graph.points);
+  updateMode();
+  setTool((ui.tools.querySelector("input:checked") as HTMLInputElement).value);
+  announce(`Back to the levels, as you left them. Your map stays saved in this browser. ${describeLevel()}`);
+}
+
+function updateMode(): void {
+  ui.backToLevels.hidden = !sim.custom;
+  ui.train.textContent = sim.custom ? "Train on my map" : "Train the cars";
+}
+
+function replaceWorld(next: World, msg: string, view?: { zoom: number; center: { x: number; y: number } }, source: MapSource = "drawn"): void {
   stopDriving();
   world = next;
-  // A new map starts the levels over; the brains keep what they've learned.
-  sim.restartLevels();
-  saveState();
+  setSource(source);
+  // A map of the visitor's own: training moves here and the level brains wait.
+  enterCustom();
   markingCount = -1;
   // Course saves arrive with roads and scenery already built.
   if (world.roadsVersion !== world.graph.version) world.generateRoads();
@@ -314,7 +418,7 @@ function frame(nowMs: number): void {
   if (theme?.sea) drawSea(ctx);
   const themed = theme ? { ...paint, road: theme.road, items: theme.items } : paint;
   world.draw(ctx, viewPoint, radius, themed, sim.mode === "off");
-  if (sim.mode === "AI" && sim.level > 1) drawTrip();
+  if (sim.mode !== "off" && sim.levelSpec.goal !== "survive") drawTrip();
 
   ctx.globalAlpha = 0.2;
   for (const car of sim.cars) if (car !== sim.leader) car.draw(ctx, car.damaged ? paint.items.wallEdge : paint.white);
@@ -347,10 +451,18 @@ function frame(nowMs: number): void {
     ui.alive.textContent = !driving ? "0" : `${sim.alive} of ${sim.cars.length}`;
     ui.run.textContent = !driving || !sim.leader
       ? "0 m"
-      : sim.level === 1
+      : sim.levelSpec.goal === "survive"
         ? meters(sim.leader.progress)
         : `${meters(sim.remaining(sim.leader))} to go, ${(sim.frames / 60).toFixed(0)} of ${((sim.timeLimit ?? 0) / 60).toFixed(0)} s${sim.tripsPerGeneration > 1 ? `, trip ${sim.trip + 1}/${sim.tripsPerGeneration}` : ""}`;
-    ui.level.textContent = `${sim.level}: ${sim.levelSpec.name}`;
+    ui.level.textContent = sim.custom ? `Your map (levels wait at ${sim.level})` : `${sim.level}: ${sim.levelSpec.name}`;
+    if (sim.mode === "KEYS" && sim.leader && !arrivalAnnounced) {
+      const secs = sim.arrivalSeconds(sim.leader);
+      if (secs !== null) {
+        arrivalAnnounced = true;
+        const limit = ((sim.timeLimit ?? 0) / 60).toFixed(0);
+        announce(sim.inTime(sim.leader) ? `You made it in ${secs.toFixed(1)} s, inside the ${limit} s limit.` : `You arrived in ${secs.toFixed(1)} s, past the ${limit} s limit.`);
+      }
+    }
     const g = sim.leader?.brain instanceof Genome ? sim.leader.brain : null;
     ui.brainNote.textContent = g ? `${g.hiddenCount} hidden ${g.hiddenCount === 1 ? "neuron" : "neurons"}, ${g.enabledCount} links, ${sim.neat.species.length || 1} species` : "";
   }
@@ -382,6 +494,10 @@ new ResizeObserver(() => fit(brainCanvas, brainCtx)).observe(brainCanvas);
 /* Levels, the trip and the learning curve */
 function describeLevel(): string {
   const spec = sim.levelSpec;
+  if (sim.custom) {
+    const where = world.markings.some((m) => m.type === "target") ? "your Target marking" : "the farthest road (add a Target marking to choose)";
+    return `Your map: drive from the Start marking to ${where} before the clock runs out. What the cars learn here stays here; the level brains wait for you.`;
+  }
   const what =
     spec.goal === "survive"
       ? "drive as long as they can without crashing."
@@ -397,7 +513,9 @@ function describeGeneration(): string {
     const where = newMap ? ` New map: ${world.theme ? WORLD_THEMES[world.theme].name : "the sample town"}, built fresh for this session.` : "";
     return `Generation ${s.generation} cleared level ${s.level}.${where} ${describeLevel()}`;
   }
-  const arrived = s.trips > 1 ? ` Its best car arrived in time on ${s.inTime} of ${s.trips} trips.` : "";
+  const arrived = sim.custom
+    ? ` Its best car ${s.inTime ? "arrived in time" : "didn't arrive in time"}.`
+    : s.trips > 1 ? ` Its best car arrived in time on ${s.inTime} of ${s.trips} trips.` : "";
   if (s.grew) return `Generation ${s.generation}'s best brain grew a neuron: ${s.neurons} hidden now.${arrived}`;
   return `Generation ${s.generation}: ${s.species} species competing.${arrived}`;
 }
@@ -465,9 +583,11 @@ function setDriving(on: boolean): void {
   }
 }
 
+let arrivalAnnounced = false;
 function startDriving(mode: "AI" | "KEYS"): void {
-  // Training and driving happen on the level maps.
-  if (!levelMapShown || sim.levelSpec.map > 0) showLevelMap(sim.levelSpec.map);
+  // Levels train on the level maps; the visitor's own map trains where it is.
+  if (!sim.custom && (!levelMapShown || sim.levelSpec.map > 0)) showLevelMap(sim.levelSpec.map);
+  arrivalAnnounced = false;
   sim.population = Number(ui.population.value);
   sim.mutation = Number(ui.mutation.value);
   if (!sim.begin(mode)) {
@@ -475,7 +595,10 @@ function startDriving(mode: "AI" | "KEYS"): void {
     return;
   }
   setDriving(true);
-  announce(mode === "KEYS" ? "You're driving. Use the arrow keys or W, A, S, D." : sim.last ? describeGeneration() : describeLevel());
+  const keys = sim.custom
+    ? `You're driving: reach the red pin within ${((sim.timeLimit ?? 0) / 60).toFixed(0)} s. Use the arrow keys or W, A, S, D; the dashed line is your GPS.`
+    : "You're driving. Use the arrow keys or W, A, S, D.";
+  announce(mode === "KEYS" ? keys : sim.last ? describeGeneration() : describeLevel());
   canvas.focus();
 }
 
@@ -494,9 +617,14 @@ ui.stop.addEventListener("click", () => {
 });
 ui.forget.addEventListener("click", () => {
   sim.forget();
+  if (custom) {
+    custom = { levels: null };
+    save(CUSTOM_KEY, custom, "session");
+  }
   saveState();
-  announce("Learning reset: level 1, random brains with no hidden neurons.");
+  announce("Learning reset: random brains with no hidden neurons, and the levels start over at 1.");
 });
+ui.backToLevels.addEventListener("click", backToLevels);
 
 ui.population.addEventListener("input", () => (ui.populationOut.value = ui.population.value));
 ui.mutation.addEventListener("input", () => {
@@ -536,6 +664,8 @@ function loadMapText(text: string, name: string): void {
       next.hasScenery
         ? `Imported ${next.graph.segments.length} road segments from OpenStreetMap.`
         : `Imported ${next.graph.segments.length} road segments. Buildings and trees are skipped on maps this large.`,
+      undefined,
+      "osm",
     );
     return;
   }
@@ -547,9 +677,11 @@ function loadMapText(text: string, name: string): void {
   const isCourse = "roadBorders" in save || (save.markings?.[0] && "directionVector" in save.markings[0]);
   if (isCourse) {
     const view = save.zoom && save.offset ? { zoom: 1 / save.zoom, center: { x: -save.offset.x, y: -save.offset.y } } : undefined;
-    replaceWorld(World.fromCourseSave(save), `Loaded ${name}.`, view);
+    // The course's saves are real streets from OpenStreetMap.
+    replaceWorld(World.fromCourseSave(save), `Loaded ${name}.`, view, "osm");
   } else {
-    replaceWorld(World.fromJSON(save), `Loaded ${name}.`);
+    const s = save as SavedWorld;
+    replaceWorld(worldFrom(s), `Loaded ${name}.`, undefined, s.source ?? "drawn");
   }
 }
 
@@ -561,7 +693,7 @@ async function copy(text: string, done: string): Promise<void> {
     announce("Your browser blocked clipboard access. Select the text and copy it manually.");
   }
 }
-ui.copyJson.addEventListener("click", () => copy(JSON.stringify(world.toJSON()), "Map JSON copied."));
+ui.copyJson.addEventListener("click", () => copy(JSON.stringify(currentMap()), "Map JSON copied."));
 ui.query.textContent = OVERPASS_QUERY;
 ui.copyQuery.addEventListener("click", () => copy(OVERPASS_QUERY, "Overpass query copied."));
 
@@ -591,6 +723,101 @@ ui.clear.addEventListener("click", () => {
   setTimeout(() => (ui.clear.textContent = "Clear the map"), 3000);
 });
 
+/* My maps, and opt-in sharing with the developer */
+function myMaps(): MyMap[] {
+  const maps = load<MyMap[]>(MAPS_KEY);
+  return Array.isArray(maps) ? maps : [];
+}
+
+/** The map last edited here is always offered, saved or not. */
+const LAST_MAP = "last";
+
+function listMyMaps(select?: string): void {
+  const maps = myMaps();
+  const options = maps.map((m) => new Option(`${m.name} (${new Date(m.savedAt).toLocaleDateString()})`, m.id));
+  if (load<SavedWorld>(WORLD_KEY)?.graph) options.unshift(new Option("The last map you edited", LAST_MAP));
+  ui.myMaps.replaceChildren(...(options.length ? options : [new Option("No saved maps yet", "")]));
+  if (select) ui.myMaps.value = select;
+  ui.myMaps.disabled = ui.openMap.disabled = options.length === 0;
+  ui.deleteMap.disabled = maps.length === 0;
+}
+
+let sharing: Sharing | null = null;
+startSharing().then((s) => {
+  sharing = s;
+  ui.shareRow.hidden = ui.shareHelp.hidden = !s;
+});
+
+ui.saveMap.addEventListener("click", async () => {
+  if (world.graph.segments.length === 0) {
+    announce("There's nothing to save yet. Draw a road first.");
+    return;
+  }
+  const name = ui.mapName.value.trim() || `Map ${myMaps().length + 1}`;
+  const entry: MyMap = { id: `m${Date.now().toString(36)}${Math.floor(Math.random() * 1e4)}`, name, savedAt: Date.now(), map: currentMap() };
+  const maps = myMaps();
+  maps.unshift(entry);
+  try {
+    localStorage.setItem(MAPS_KEY, JSON.stringify(maps));
+  } catch {
+    announce("This map is too big to keep in this browser. Use Copy map JSON to keep it in a file instead.");
+    return;
+  }
+  listMyMaps(entry.id);
+  ui.mapName.value = "";
+  if (!ui.shareMap.checked || !sharing) {
+    announce(`Saved "${name}" to My maps.`);
+    return;
+  }
+  ui.shareMap.checked = false;
+  const shared = { name, savedAt: entry.savedAt, source: mapSource, theme: world.theme ?? null, graph: entry.map.graph, markings: entry.map.markings };
+  if (JSON.stringify(shared).length > MAX_SHARE_BYTES) {
+    announce(`Saved "${name}" to My maps. It's too big to share; thanks for offering.`);
+    return;
+  }
+  try {
+    await sharing.share(entry.id, shared);
+    announce(`Saved "${name}" to My maps and shared it with the developer. Thank you!`);
+  } catch {
+    announce(`Saved "${name}" to My maps, but sharing didn't go through this time.`);
+  }
+});
+
+ui.openMap.addEventListener("click", () => {
+  const last = load<SavedWorld>(WORLD_KEY);
+  const entry = ui.myMaps.value === LAST_MAP && last ? { name: "your last map", map: last } : myMaps().find((m) => m.id === ui.myMaps.value);
+  if (!entry) return;
+  try {
+    replaceWorld(worldFrom(entry.map), "", undefined, entry.map.source ?? "drawn");
+    announce(`Opened "${entry.name}". ${describeLevel()}`);
+  } catch {
+    announce("That saved map couldn't be read.");
+  }
+});
+
+let deleteArmed = "";
+ui.deleteMap.addEventListener("click", () => {
+  const id = ui.myMaps.value;
+  if (!id || id === LAST_MAP) {
+    announce("The last map you edited isn't saved in My maps, so there's nothing to delete. Save it to keep it by name.");
+    return;
+  }
+  if (deleteArmed !== id) {
+    deleteArmed = id;
+    ui.deleteMap.textContent = "Click again";
+    setTimeout(() => {
+      deleteArmed = "";
+      ui.deleteMap.textContent = "Delete";
+    }, 3000);
+    return;
+  }
+  deleteArmed = "";
+  ui.deleteMap.textContent = "Delete";
+  save(MAPS_KEY, myMaps().filter((m) => m.id !== id));
+  listMyMaps();
+  announce("Deleted from My maps.");
+});
+
 ui.zoomIn.addEventListener("click", () => viewport.zoomBy(1.25));
 ui.zoomOut.addEventListener("click", () => viewport.zoomBy(0.8));
 ui.zoomFit.addEventListener("click", () => viewport.fit(world.graph.points));
@@ -599,11 +826,20 @@ window.addEventListener("pagehide", saveWorld);
 setInterval(saveWorld, 5000);
 
 /* Boot */
-world.generateRoads();
-world.generateItems();
-seenVersion = world.graph.version;
+if (custom) {
+  world.generateRoads();
+  world.generateItems();
+  seenVersion = world.graph.version;
+  setSource(mapSource);
+} else {
+  // The levels open on their own map; the visitor's last map waits in this browser.
+  showLevelMap(sim.levelSpec.map);
+}
+updateMode();
+listMyMaps();
+announce(custom ? describeLevel() : `${describeLevel()} Press Train the cars, or draw on the map to make it your own.`);
 requestAnimationFrame(() => {
-  if (savedView) {
+  if (custom && savedView) {
     viewport.zoom = savedView.zoom;
     viewport.center = savedView.center;
   } else viewport.fit(world.graph.points);

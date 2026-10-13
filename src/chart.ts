@@ -63,7 +63,7 @@ export function drawLearningCurve(
     // Label where each level starts; quick level-ups share one label so they don't overlap.
     if ((i === 0 || rows[i - 1].level !== r.level) && x - lastLabel > 22) {
       ctx.fillStyle = colors.label;
-      ctx.fillText(`L${r.level}`, x + 1, pad.t - 4);
+      ctx.fillText(r.level > 0 ? `L${r.level}` : "Your map", x + 1, pad.t - 4);
       lastLabel = x;
     }
   });
