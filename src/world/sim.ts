@@ -1,4 +1,5 @@
 import { Car } from "../car";
+import { Sensor } from "../sensor";
 import type { CurvePoint } from "../chart";
 import { Genome, Neat, type NeatJSON } from "../neat";
 import { mulberry32 } from "../utils";
@@ -58,8 +59,9 @@ export interface WorldSaved {
   history?: WorldSummary[];
 }
 
-/** Ray sensors plus the GPS direction in; forward / left / right / reverse out. */
-export const WORLD_INPUTS = 6;
+export const WORLD_RAYS = 7;
+/** Seven rays across 180 degrees, the car's speed, and the GPS direction. */
+export const WORLD_INPUTS = WORLD_RAYS + 2;
 const OUTPUTS = 4;
 const LEADER_PATIENCE = 600;
 /** Level 1 is passed by a car still driving at the time limit. */
@@ -222,6 +224,7 @@ export class WorldSim {
     const heading = Math.atan2(-start.direction.x, -start.direction.y);
     const make = (type: "AI" | "KEYS", brain?: Genome) => {
       const car = new Car(start.center.x, start.center.y, 30, 50, type);
+      car.sensor = new Sensor(car, WORLD_RAYS, 150, Math.PI);
       car.angle = heading;
       car.fitness = "odometer";
       car.stallFrames = CAR_STALL_FRAMES;
@@ -298,7 +301,7 @@ export class WorldSim {
       const t = this.trips.get(car)!;
       if (t.arrivedAt !== undefined) return;
       if (car.damaged && car.type === "AI") return;
-      car.update(obstacles.filter((o) => near(o, car)), [], [this.gps(car, t)]);
+      car.update(obstacles.filter((o) => near(o, car)), [], [car.speed / car.maxSpeed, this.gps(car, t)]);
       if (!nav) return;
       // Finding the nearest road is the costly part; each car does it every fourth frame.
       if ((this.frames + i) % 4 === 0 || t.segment < 0) t.segment = nav.nearestSegment(car);

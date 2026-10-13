@@ -89,18 +89,19 @@ const paint: WorldPaint = {
 const ground = color("--ground");
 
 /* Storage is a convenience: the page works when it is blocked. */
-function load<T>(key: string): T | null {
+function load<T>(key: string, store: "local" | "session" = "local"): T | null {
   try {
-    const raw = localStorage.getItem(key);
+    const raw = (store === "session" ? sessionStorage : localStorage).getItem(key);
     return raw ? (JSON.parse(raw) as T) : null;
   } catch {
     return null;
   }
 }
-function save(key: string, value: unknown): void {
+function save(key: string, value: unknown, store: "local" | "session" = "local"): void {
   try {
-    if (value === null) localStorage.removeItem(key);
-    else localStorage.setItem(key, JSON.stringify(value));
+    const s = store === "session" ? sessionStorage : localStorage;
+    if (value === null) s.removeItem(key);
+    else s.setItem(key, JSON.stringify(value));
   } catch {
     /* ignore */
   }
@@ -123,7 +124,13 @@ function initialWorld(): World {
 let world = initialWorld();
 const viewport = new Viewport(canvas);
 function loadState(): WorldSaved | null {
-  const s = load<WorldSaved>(STATE_KEY);
+  // Learning lasts for the tab session, like the highway: refresh keeps it, closing the tab resets it.
+  try {
+    localStorage.removeItem(STATE_KEY); // earlier versions kept it forever
+  } catch {
+    /* ignore */
+  }
+  const s = load<WorldSaved>(STATE_KEY, "session");
   return s?.neat?.inputs === WORLD_INPUTS && Array.isArray(s.neat.genomes) && s.neat.genomes.length ? s : null;
 }
 let sim: WorldSim;
@@ -133,7 +140,7 @@ try {
   sim = new WorldSim(() => world);
 }
 function saveState(): void {
-  save(STATE_KEY, sim.generation > 1 ? sim.toJSON() : null);
+  save(STATE_KEY, sim.generation > 1 ? sim.toJSON() : null, "session");
 }
 let stepsPerFrame = 1;
 
