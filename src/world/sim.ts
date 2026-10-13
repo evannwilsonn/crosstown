@@ -8,9 +8,10 @@ import { Light, Stop, type Marking } from "./markings";
 import { Navigator } from "./nav";
 import {
   CROSSWALK_WAIT_FRAMES, HAZARD_NAMES, hazardTimeFactor, ICE_GRIP, onIce, pedestriansFor, RAIN_GRIP, roadCondition,
-  SNOW_GRIP, THEME_HAZARD, visibility, type Hazard, type IcePatch, type Pedestrian,
+  SNOW_GRIP, townHazards, visibility, type Hazard, type IcePatch, type Pedestrian,
 } from "./hazards";
 import { townLook, type TimeOfDay } from "./worldThemes";
+import { CityTraffic } from "./citytraffic";
 import type { World } from "./world";
 
 export type WorldDriveMode = "off" | "AI" | "KEYS";
@@ -89,8 +90,8 @@ export function worldLevelSpec(n: number): WorldLevel {
   const stage = map === 0 ? SAMPLE_STAGES[level - 1] : TOWN_STAGES[(level - SAMPLE_LEVELS - 1) % LEVELS_PER_MAP];
   const look = map === 0 ? null : townLook(map);
   const light: TimeOfDay = look?.time ?? "day";
-  const hazard = look ? THEME_HAZARD[look.theme] : null;
-  const hazards = hazard && (stage === "hazard" || stage === "stack") ? [hazard] : [];
+  const town = look ? townHazards(look.theme, map) : null;
+  const hazards = town ? (stage === "hazard" ? town.alone : stage === "stack" ? town.stacked : []) : [];
   if (stage === "survive") {
     return { number: level, name: "Stay on the road for 45 s", map, stage, goal: "survive", minTrip: 0, timeFactor: 3, closures: 0, hazards, light };
   }
@@ -109,7 +110,7 @@ export function worldLevelSpec(n: number): WorldLevel {
     case "far": return spec("Farther away", far, easy, 0);
     case "tight": return spec("Beat a tighter clock", near, tight, 0);
     case "detour": return spec(`Detours: ${roads} each trip`, near, easy, closures);
-    case "hazard": return spec(HAZARD_NAMES[hazard!], near, easy, 0);
+    case "hazard": return spec(hazards.map((h) => HAZARD_NAMES[h]).join(" and "), near, easy, 0);
     default: return spec(map === 0 ? "Far and fast" : "Everything at once", far, tight, closures);
   }
 }
@@ -239,6 +240,8 @@ export class WorldSim {
   pedestrians: Pedestrian[] = [];
   /** Patches of black ice on this level's routes, on ice levels. */
   ice: IcePatch[] = [];
+  /** Other cars on the streets, on traffic levels. */
+  traffic: CityTraffic | null = null;
   /** Called when a level starts on a different map, so the page can load it before cars spawn. */
   onMapChange?: (map: number) => void;
   private currentMap = 0;
@@ -337,14 +340,19 @@ export class WorldSim {
       this.setClosed(new Set());
       this.ice = [];
       this.pedestrians = [];
+      this.traffic = null;
       return;
     }
     const plan = this.levelPlan();
     this.destination = plan.target;
+    this.setClosed(plan.closed[Math.min(this.trip, plan.closed.length - 1)]);
     this.ice = plan.ice;
     const w = this.world();
     this.pedestrians = this.levelSpec.hazards.includes("pedestrians") ? pedestriansFor(w.markings, w.settings.roadWidth, this.targetSeed) : [];
-    this.setClosed(plan.closed[Math.min(this.trip, plan.closed.length - 1)]);
+    // Traffic starts the same way on every run of a trip, so each generation meets the same cars.
+    this.traffic = this.levelSpec.hazards.includes("traffic")
+      ? new CityTraffic(w.graph, w.markings, w.settings.roadWidth, (this.targetSeed ^ Math.imul(this.level, 7919) ^ Math.imul(this.trip + 1, 104729)) >>> 0, Math.min(18, Math.max(6, Math.round(w.graph.segments.length / 4))), this.closed, this.origin.center)
+      : null;
   }
 
   /**
@@ -626,6 +634,8 @@ export class WorldSim {
     const nav = this.nav;
     const spec = this.levelSpec;
     for (const p of this.pedestrians) p.update(this.clock);
+    this.traffic?.update();
+    const movers = this.traffic ? [...this.pedestrians, ...this.traffic.cars] : this.pedestrians;
     const condition = roadCondition(spec.hazards);
     const wet = spec.hazards.includes("rain");
     const icy = spec.hazards.includes("ice");
@@ -636,7 +646,7 @@ export class WorldSim {
       if (car.damaged && car.type === "AI") return;
       if (car.sensor) car.sensor.visibility = visibility(car, rayAngles, spec.hazards, spec.light, world.graph.points);
       car.grip = wet ? RAIN_GRIP : icy ? (this.ice.length && onIce(car, this.ice) ? ICE_GRIP : SNOW_GRIP) : 1;
-      const people = this.pedestrians.length ? this.pedestrians.filter((p) => Math.abs(p.x - car.x) < SENSOR_REACH && Math.abs(p.y - car.y) < SENSOR_REACH) : [];
+      const people = movers.length ? movers.filter((p) => Math.abs(p.x - car.x) < SENSOR_REACH && Math.abs(p.y - car.y) < SENSOR_REACH) : [];
       car.update(obstacles.filter((o) => near(o, car)), people, [car.speed / car.maxSpeed, this.gps(car, t), condition]);
       if (this.origin) t.far = Math.max(t.far, distance(car, this.origin.center));
       if (!nav) return;

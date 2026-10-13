@@ -7,7 +7,7 @@ import { isOsmData, OVERPASS_QUERY, parseOsm } from "./osm";
 import { sampleWorld } from "./sample";
 import { SURVIVE_FRAMES, WORLD_INPUTS, WorldSim, worldLevelSpec, type WorldSaved } from "./sim";
 import { drawClosures, drawGround, drawHeadlights, drawIce, drawLamps, drawSea, drawTint, drawWeather } from "./scenery";
-import { HAZARD_HINTS } from "./hazards";
+import { CLOSURE_STYLE, HAZARD_HINTS } from "./hazards";
 import { generateMap } from "./mapgen";
 import { themeAt, WORLD_THEMES, type TimeOfDay, type WorldThemeName } from "./worldThemes";
 import { MAX_SHARE_BYTES, startSharing, type Sharing } from "./share";
@@ -408,12 +408,13 @@ function frame(nowMs: number): void {
   world.draw(ctx, viewPoint, radius, themed, sim.mode === "off");
   if (theme) drawTint(ctx, theme, view);
   if (sim.mode !== "off") {
-    drawClosures(ctx, world, sim.closed, sim.barriers, { orange: paint.orange, white: paint.white });
+    drawClosures(ctx, world, sim.closed, sim.barriers, { orange: paint.orange, white: paint.white }, world.theme ? CLOSURE_STYLE[world.theme] : "construction", sim.clock);
+    sim.traffic?.draw(ctx);
     if (sim.ice.length) drawIce(ctx, sim.ice);
   }
   if (theme) drawLamps(ctx, theme, world, view);
   if (sim.mode !== "off" && sim.levelSpec.goal !== "survive") drawTrip();
-  if (theme) drawHeadlights(ctx, theme, sim.cars, sim.followed);
+  if (theme) drawHeadlights(ctx, theme, sim.traffic ? [...sim.traffic.cars.map((c) => c.body), ...sim.cars] : sim.cars, sim.followed);
 
   ctx.globalAlpha = 0.2;
   for (const car of sim.cars) if (car !== sim.followed) car.draw(ctx, car.damaged ? paint.items.wallEdge : paint.white);
@@ -501,7 +502,7 @@ function describeLevel(): string {
     easy: spec.map === 0 ? `a first target, close by, on a relaxed clock. ${trips}` : `new streets to learn, so the target is close and the clock relaxed. ${trips}`,
     far: `the target is farther away. ${trips}`,
     tight: `the target is close again, but the clock is tighter. ${trips}`,
-    detour: `on trips 2 and 3, roads on the way there close (orange barricades), so every trip needs a different route. ${trips}`,
+    detour: `on trips 2 and 3, roads on the way there close (${world.theme && CLOSURE_STYLE[world.theme] !== "construction" ? { snow: "snowdrifts", flood: "flooding", sand: "sand drifts" }[CLOSURE_STYLE[world.theme] as "snow" | "flood" | "sand"] : "construction barricades"}), so every trip needs a different route. ${trips}`,
     hazard: spec.hazards.length ? `a new hazard: ${HAZARD_HINTS[spec.hazards[0]]}. ${trips}` : trips,
     stack: spec.closures
       ? `a far target, a tight clock, road closures${spec.hazards.length ? " and the town's hazard" : ""}, all at once. Clear this and the town changes. ${trips}`
@@ -855,4 +856,5 @@ requestAnimationFrame(() => {
 });
 
 // Exposed for console experiments.
-(window as unknown as { sim: WorldSim }).sim = sim;
+(window as unknown as { sim: WorldSim; viewport: Viewport }).sim = sim;
+(window as unknown as { viewport: Viewport }).viewport = viewport;

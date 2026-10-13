@@ -3,7 +3,7 @@ import { hash2 } from "./items";
 import type { Point } from "./geom";
 import type { World } from "./world";
 import type { WorldTheme } from "./worldThemes";
-import type { Hazard, IcePatch } from "./hazards";
+import type { ClosureStyle, Hazard, IcePatch } from "./hazards";
 
 /**
  * What a town paints around its roads: textures on the ground, the sea, street lamps after dark,
@@ -149,7 +149,7 @@ export function drawHeadlights(ctx: CanvasRenderingContext2D, theme: WorldTheme,
   const strong = theme.lamps.strength > 0.3;
   // A pack of cars at the start would add up to a white blur; past the followed car, only a
   // few beams are drawn, and faintly.
-  const others = cars.filter((c) => c !== followed && !c.damaged).slice(0, strong ? 10 : 0);
+  const others = cars.filter((c) => c !== followed && !c.damaged).slice(0, strong ? 20 : 0);
   ctx.save();
   ctx.globalCompositeOperation = "lighter";
   for (const car of followed && !followed.damaged ? [followed, ...others] : others) {
@@ -176,25 +176,77 @@ export function drawHeadlights(ctx: CanvasRenderingContext2D, theme: WorldTheme,
   ctx.restore();
 }
 
-/** A closed road: an orange wash between its barricades, striped boards, and cones. */
+/**
+ * A closed road. Construction gets an orange wash, striped boards and cones; weather closes
+ * roads its own way: snowdrifts, flooding (water over the road, boards at each end), or sand
+ * drifts. The barricades are the same walls to the sensors whatever they look like.
+ */
 export function drawClosures(
   ctx: CanvasRenderingContext2D,
   world: World,
   closed: ReadonlySet<number>,
   barriers: Point[][],
   colors: { orange: string; white: string },
+  style: ClosureStyle = "construction",
+  clock = 0,
 ): void {
   if (closed.size === 0) return;
   ctx.save();
+  const wash: Record<ClosureStyle, string> = {
+    construction: "rgba(242,112,31,0.22)",
+    snow: "rgba(244,248,252,0.85)",
+    flood: "rgba(40,112,150,0.7)",
+    sand: "rgba(214,178,120,0.85)",
+  };
   for (const si of closed) {
     const s = world.graph.segments[si];
-    ctx.strokeStyle = "rgba(242,112,31,0.22)";
+    ctx.strokeStyle = wash[style];
+    if (style === "flood") {
+      // Water over the road, with ripples drifting along it.
+      ctx.lineWidth = world.settings.roadWidth * 0.95;
+      ctx.lineCap = "round";
+      ctx.beginPath();
+      ctx.moveTo(s.p1.x, s.p1.y);
+      ctx.lineTo(s.p2.x, s.p2.y);
+      ctx.stroke();
+      const len = Math.hypot(s.p2.x - s.p1.x, s.p2.y - s.p1.y);
+      ctx.strokeStyle = "rgba(220,240,250,0.45)";
+      ctx.lineWidth = 2;
+      for (let d = 30; d < len - 30; d += 45) {
+        const t = ((d + clock * 0.3) % len) / len;
+        const x = s.p1.x + (s.p2.x - s.p1.x) * t + (d % 3 - 1) * 18;
+        const y = s.p1.y + (s.p2.y - s.p1.y) * t + ((d >> 1) % 3 - 1) * 14;
+        ctx.beginPath();
+        ctx.arc(x, y, 8, 0.2, Math.PI - 0.2);
+        ctx.stroke();
+      }
+      continue;
+    }
     ctx.lineWidth = world.settings.roadWidth * 0.8;
     ctx.lineCap = "butt";
     ctx.beginPath();
     ctx.moveTo(s.p1.x, s.p1.y);
     ctx.lineTo(s.p2.x, s.p2.y);
     ctx.stroke();
+  }
+  if (style === "snow" || style === "sand") {
+    // Drifts piled across the road: overlapping mounds with a shadowed edge.
+    const [fill, shade] = style === "snow" ? ["#f7fafc", "rgba(120,150,180,0.5)"] : ["#dcb77c", "rgba(140,100,50,0.5)"];
+    for (const [a, b] of barriers) {
+      const len = Math.hypot(b.x - a.x, b.y - a.y);
+      for (const [color, dx, dy, grow] of [[shade, 4, 6, 0], [fill, 0, 0, 0]] as const) {
+        ctx.fillStyle = color;
+        for (let d = 0; d <= len; d += 14) {
+          const t = d / len;
+          const r = 15 + 7 * Math.sin(t * Math.PI * 3 + a.x) + grow;
+          ctx.beginPath();
+          ctx.arc(a.x + (b.x - a.x) * t + dx, a.y + (b.y - a.y) * t + dy, r, 0, Math.PI * 2);
+          ctx.fill();
+        }
+      }
+    }
+    ctx.restore();
+    return;
   }
   for (const [a, b] of barriers) {
     const len = Math.hypot(b.x - a.x, b.y - a.y);

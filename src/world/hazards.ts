@@ -16,7 +16,7 @@ import type { TimeOfDay, WorldThemeName } from "./worldThemes";
  * Wet and icy roads also show on one of the brain's inputs, the way a driver sees rain on the
  * windshield: it says the road is slippery, and evolution has to work out what to do about it.
  */
-export type Hazard = "pedestrians" | "sandstorm" | "ice" | "fog" | "rain";
+export type Hazard = "pedestrians" | "sandstorm" | "ice" | "fog" | "rain" | "traffic";
 
 export const THEME_HAZARD: Record<WorldThemeName, Hazard> = {
   downtown: "pedestrians",
@@ -32,6 +32,7 @@ export const HAZARD_NAMES: Record<Hazard, string> = {
   ice: "Black ice",
   fog: "Sea fog",
   rain: "Rain on the roads",
+  traffic: "Night traffic",
 };
 
 export const HAZARD_HINTS: Record<Hazard, string> = {
@@ -40,6 +41,30 @@ export const HAZARD_HINTS: Record<Hazard, string> = {
   ice: "the snow makes the roads slippery and patches of black ice on the way give almost no grip",
   fog: "thick fog cuts every sensor to under half its reach",
   rain: "wet roads give less grip, so fast turns slide wide and stopping takes longer",
+  traffic: "other cars drive the streets, stop at red lights and queue at junctions; hitting one is a crash",
+};
+
+/**
+ * The hazards a town brings. The first round of towns (day) and the second (dusk) each bring
+ * their own theme's hazard; dusk towns are also dark on every level. Night towns introduce
+ * traffic on its own, then stack it with the theme's hazard. After that, every town has both.
+ */
+export function townHazards(theme: WorldThemeName, map: number): { alone: Hazard[]; stacked: Hazard[] } {
+  const own = THEME_HAZARD[theme];
+  const round = Math.floor((map - 1) / 5);
+  if (round < 2) return { alone: [own], stacked: [own] };
+  if (round === 2) return { alone: ["traffic"], stacked: [own, "traffic"] };
+  return { alone: [own, "traffic"], stacked: [own, "traffic"] };
+}
+
+/** What closes a road on detour levels: construction, or the weather. */
+export type ClosureStyle = "construction" | "snow" | "flood" | "sand";
+export const CLOSURE_STYLE: Record<WorldThemeName, ClosureStyle> = {
+  downtown: "construction",
+  desert: "sand",
+  snowy: "snow",
+  coastal: "flood",
+  autumn: "flood",
 };
 
 /** Road condition, as the brain's input sees it: 0 dry, 0.5 wet, 1 icy. */
@@ -55,6 +80,7 @@ export function hazardTimeFactor(hazards: readonly Hazard[], light: TimeOfDay): 
   if (hazards.includes("rain")) f *= 1.15;
   if (hazards.includes("ice")) f *= 1.3;
   if (hazards.includes("fog") || hazards.includes("sandstorm")) f *= 1.15;
+  if (hazards.includes("traffic")) f *= 1.2;
   if (light === "dusk") f *= 1.05;
   if (light === "night") f *= 1.1;
   return f;

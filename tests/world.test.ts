@@ -350,8 +350,11 @@ describe("timed world levels", () => {
       if (s.stage === "far") expect(same(s.minTrip > easy.minTrip, s.timeFactor === easy.timeFactor, s.closures === 0, s.hazards.length === 0)).toEqual([true, true, true, true]);
       if (s.stage === "tight") expect(same(s.minTrip === easy.minTrip, s.timeFactor < easy.timeFactor, s.closures === 0, s.hazards.length === 0)).toEqual([true, true, true, true]);
       if (s.stage === "detour") expect(same(s.minTrip === easy.minTrip, s.timeFactor === easy.timeFactor, s.closures > 0, s.hazards.length === 0)).toEqual([true, true, true, true]);
-      if (s.stage === "hazard") expect(same(s.minTrip === easy.minTrip, s.timeFactor === easy.timeFactor, s.closures === 0, s.hazards.length === 1)).toEqual([true, true, true, true]);
-      if (s.stage === "stack") expect([s.minTrip > easy.minTrip, s.timeFactor < easy.timeFactor, s.map === 0 || s.hazards.length === 1]).toEqual([true, true, true]);
+      if (s.stage === "hazard") expect(same(s.minTrip === easy.minTrip, s.timeFactor === easy.timeFactor, s.closures === 0, s.hazards.length >= 1)).toEqual([true, true, true, true]);
+      if (s.stage === "stack") {
+        const alone = worldLevelSpec(n - 1).hazards;
+        expect([s.minTrip > easy.minTrip, s.timeFactor < easy.timeFactor, s.map === 0 || alone.every((h) => s.hazards.includes(h))]).toEqual([true, true, true]);
+      }
       // Dusk and night towns are dark on every level.
       expect(s.light).toBe(worldLevelSpec(firstLevelOf(s.map)).light);
     }
@@ -359,6 +362,10 @@ describe("timed world levels", () => {
     expect([1, 2, 3, 4, 5].every((n) => worldLevelSpec(n).closures === 0 && worldLevelSpec(n).hazards.length === 0)).toBe(true);
     expect(worldLevelSpec(9).closures).toBe(1);
     expect(worldLevelSpec(10).hazards).toEqual(["pedestrians"]);
+    // Night towns introduce traffic on its own, then stack it with the town's own hazard.
+    const night = firstLevelOf(11);
+    expect(worldLevelSpec(night + 4).hazards).toEqual(["traffic"]);
+    expect(worldLevelSpec(night + 5).hazards).toEqual(["pedestrians", "traffic"]);
     expect(worldLevelSpec(60).minTrip).toBeGreaterThan(worldLevelSpec(7).minTrip);
   });
 
@@ -443,6 +450,29 @@ describe("timed world levels", () => {
 });
 
 describe("generated level maps", () => {
+  it("traffic keeps to the streets, keeps moving, and never drives into another traffic car", async () => {
+    const { generateMap } = await import("../src/world/mapgen");
+    const { CityTraffic } = await import("../src/world/citytraffic");
+    const { polysIntersect } = await import("../src/utils");
+    const w = generateMap(1, 9);
+    const t = new CityTraffic(w.graph, w.markings, w.settings.roadWidth, 5, 10, new Set(), { x: 99999, y: 99999 });
+    expect(t.cars.length).toBe(10);
+    const start = t.cars.map((c) => ({ x: c.x, y: c.y }));
+    for (let f = 0; f < 1500; f++) {
+      w.updateLights(f / 60);
+      t.update();
+      for (const c of t.cars) {
+        const off = Math.min(...w.graph.segments.map((s) => s.distanceToPoint(c)));
+        expect(off).toBeLessThan(w.settings.roadWidth / 2);
+      }
+    }
+    const moved = t.cars.filter((c, i) => Math.hypot(c.x - start[i].x, c.y - start[i].y) > 200).length;
+    expect(moved).toBeGreaterThan(5);
+    for (let i = 0; i < t.cars.length; i++) for (let j = i + 1; j < t.cars.length; j++) {
+      expect(polysIntersect(t.cars[i].polygon, t.cars[j].polygon)).toBe(false);
+    }
+  });
+
   it("the GPS never asks for a U-turn mid-street: routes leave ahead of the car", async () => {
     const { Navigator } = await import("../src/world/nav");
     // A straight street a-b-c; the car is between a and b facing c, the target is behind it at a's side.

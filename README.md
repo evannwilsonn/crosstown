@@ -87,6 +87,11 @@ Navigation never steers. The brain has to learn to follow the arrow and stay on 
 | Coastal | Sea fog | Every sensor sees less than half as far |
 | Autumn | Rain | Wet roads cut grip, so fast turns slide |
 | Dusk and night towns | Darkness, on every level | Past the headlights the side sensors see less (much less at night), except under the street lamp at every junction |
+| Night towns | Traffic | Other cars drive the streets in their lanes, choose a street at each junction, stop at red lights and queue. They never react to the learners: the learners have to keep clear, and hitting one is a crash. Every run of a trip starts the traffic the same way, so all brains in a generation meet the same cars |
+
+Night towns introduce traffic on its own, then stack it with the town's own hazard. From the next round of towns on, every town has both.
+
+Weather closes roads too. On detour levels, snowy towns are blocked by snowdrifts, coastal and autumn towns by flooding, and the desert by sand drifts. Downtown uses construction barricades. They look different, but they're the same walls to the sensors.
 
 Grip is modelled simply: with less grip the car's direction of travel lags its heading, so it slides through turns, and it accelerates and brakes less.
 
@@ -167,7 +172,8 @@ src/
   visualizer.ts  draws the leader's network live
   main.ts        highway canvas, UI controls, session storage
   world/         geometry, graph, world generation, markings, editors, viewport, OSM, minimap,
-                 navigation (nav.ts), level maps (mapgen.ts), themes, sim, sharing (share.ts)
+                 navigation (nav.ts), level maps (mapgen.ts), themes and scenery, hazards
+                 (hazards.ts), town traffic (citytraffic.ts), sim, sharing (share.ts)
 tests/core.test.ts, tests/world.test.ts
 ```
 
