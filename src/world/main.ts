@@ -1,18 +1,25 @@
 import "../style.css";
-import type { Parent } from "../simulation";
+import { isParent, type Parent } from "../simulation";
+import pretrained from "../pretrained/world.json";
 import { GraphEditor, MarkingEditor, type Editor } from "./editors";
 import { Graph } from "./graph";
 import type { MarkingType } from "./markings";
 import { drawMinimap } from "./minimap";
 import { isOsmData, OVERPASS_QUERY, parseOsm } from "./osm";
 import { sampleWorld } from "./sample";
-import { WorldSim } from "./sim";
+import { planRoute, type Route } from "./route";
+import { WORLD_COUNTS, WorldSim } from "./sim";
 import { Viewport } from "./viewport";
 import { drawNetwork } from "../visualizer";
 import { World, type CourseSave, type WorldJSON, type WorldPaint } from "./world";
 
 const WORLD_KEY = "sdc.world.v1";
-const PARENT_KEY = "sdc.world.parent.v1";
+// v2: route following changed the brain to 9 inputs and 8 hidden neurons.
+const PARENT_KEY = "sdc.world.parent.v2";
+/** Trained offline with scripts/train-world-robust.ts: follows its route, stops for stop signs and red lights. */
+const PRETRAINED = pretrained as Parent;
+/** Max speed runs as many steps as fit in this much of each frame. */
+const MAX_BUDGET_MS = 14;
 const PX_PER_METER = 10;
 const ITEM_DELAY_MS = 300;
 /** Regenerating roads is quadratic in road count; above this, maps are view-and-drive only. */
@@ -44,6 +51,8 @@ const ui = {
   driveSelf: $<HTMLButtonElement>("#drive-self"),
   stop: $<HTMLButtonElement>("#stop-driving"),
   forget: $<HTMLButtonElement>("#forget"),
+  pretrained: $<HTMLButtonElement>("#pretrained"),
+  speed: $<HTMLFieldSetElement>("#speed"),
   importFile: $<HTMLInputElement>("#import"),
   copyJson: $<HTMLButtonElement>("#copy-json"),
   sample: $<HTMLButtonElement>("#sample"),
@@ -114,7 +123,18 @@ function initialWorld(): World {
 
 let world = initialWorld();
 const viewport = new Viewport(canvas);
-const sim = new WorldSim(() => world, load<Parent>(PARENT_KEY));
+function loadParent(): Parent | null {
+  try {
+    const raw = localStorage.getItem(PARENT_KEY);
+    if (raw === null) return PRETRAINED;
+    const p: unknown = JSON.parse(raw);
+    return isParent(p, WORLD_COUNTS) ? p : null;
+  } catch {
+    return PRETRAINED;
+  }
+}
+const sim = new WorldSim(() => world, loadParent());
+let stepsPerFrame = 1;
 
 const graphEditor = new GraphEditor(viewport, () => world.graph);
 const markingEditors = new Map<MarkingType, MarkingEditor>();
@@ -124,11 +144,11 @@ const HELP: Record<string, string> = {
   roads: "Click empty ground to add an intersection. Click another to connect them. Drag to move one, right-click to delete it.",
   stop: "Hover a lane and click to paint a stop line. Right-click a marking to remove it.",
   yield: "Hover a lane and click to paint yield triangles. Right-click a marking to remove it.",
-  light: "Click a lane before an intersection to add a signal. Cars treat red and yellow as a wall.",
+  light: "Click a lane before an intersection to add a signal. Cars must stop for red; on yellow they stop if they can.",
   crossing: "Hover a road and click to paint a crosswalk across both lanes.",
   parking: "Hover a lane and click to paint a parking bay.",
   start: "Click a lane to set where cars spawn and which way they face. The first start marking is used.",
-  target: "Click a lane to mark a destination.",
+  target: "Click a lane to mark a destination. Cars plan the shortest legal route to it, shown as a dotted line.",
 };
 
 function setTool(tool: string): void {
@@ -216,11 +236,20 @@ let lastStats = 0;
 function frame(nowMs: number): void {
   const time = nowMs / 1000;
   regenerate(nowMs);
-  world.updateLights(time);
+  // While cars drive, the sim runs the lights on its own clock so they keep pace at any speed.
+  if (sim.mode === "off") world.updateLights(time);
 
-  if (sim.step()) {
+  const t0 = performance.now();
+  for (let i = 0; i < stepsPerFrame && performance.now() - t0 < MAX_BUDGET_MS; i++) {
+    if (!sim.step()) continue;
     save(PARENT_KEY, sim.parent);
-    announce(`Generation ${sim.generation} started from a ${sim.parent ? meters(sim.parent.progress) : "random"} brain.`);
+    const v = sim.violations;
+    const rules = v.stop || v.lane ? ` ${v.stop} ran a stop sign, ${v.lane} left their lane.` : "";
+    announce(
+      sim.lastArrived
+        ? `Generation ${sim.generation - 1} reached the target in ${sim.parent?.arrivedIn?.toFixed(1)} s.${rules}`
+        : `Generation ${sim.generation - 1} didn't reach the target.${rules}`,
+    );
   }
   if (sim.leader && !viewport.isPanning) {
     viewport.center = {
@@ -238,6 +267,8 @@ function frame(nowMs: number): void {
   const viewPoint = viewport.center;
   const radius = viewport.viewRadius;
   world.draw(ctx, viewPoint, radius, paint, sim.mode === "off");
+  const route = sim.route ?? previewRoute();
+  route?.draw(ctx, paint.yellow, sim.leader ? sim.along(sim.leader) : 0);
 
   ctx.globalAlpha = 0.2;
   for (const car of sim.cars) if (car !== sim.leader) car.draw(ctx, car.damaged ? paint.items.wallEdge : paint.white);
@@ -267,8 +298,15 @@ function frame(nowMs: number): void {
     const driving = sim.mode !== "off";
     ui.generation.textContent = !driving ? "Parked" : sim.mode === "KEYS" ? "Manual" : String(sim.generation);
     ui.alive.textContent = !driving ? "0" : `${sim.alive} of ${sim.cars.length}`;
-    ui.run.textContent = meters(sim.leader?.progress ?? 0);
-    ui.best.textContent = sim.parent ? meters(sim.parent.progress) : "None yet";
+    const total = sim.route?.length ?? 0;
+    ui.run.textContent = driving && total ? `${meters(sim.leader ? sim.along(sim.leader) : 0)} of ${meters(total)}` : "0 m";
+    ui.best.textContent = sim.parent?.arrivedIn
+      ? `Arrived in ${sim.parent.arrivedIn.toFixed(1)} s`
+      : sim.parent?.brain === PRETRAINED.brain
+        ? "Trained brain"
+        : sim.parent
+          ? "Still learning"
+          : "None yet";
   }
   requestAnimationFrame(frame);
 }
@@ -295,6 +333,22 @@ function drawBrain(now: number): void {
 }
 new ResizeObserver(() => fit(brainCanvas, brainCtx)).observe(brainCanvas);
 
+/* Route preview while parked: replanned only when the map or markings change. */
+let previewKey = "";
+let preview: Route | null = null;
+function previewRoute(): Route | null {
+  const start = world.markings.find((m) => m.type === "start");
+  const target = world.markings.find((m) => m.type === "target");
+  const key = `${world.graph.version}|${world.markings.length}|${start?.center.x},${start?.center.y}|${target?.center.x},${target?.center.y}`;
+  if (key !== previewKey) {
+    previewKey = key;
+    preview = start && world.graph.segments.length <= EDIT_LIMIT
+      ? planRoute(world.graph, start.center, start.direction, target?.center ?? null, world.settings.roadWidth)
+      : null;
+  }
+  return preview;
+}
+
 /* Driving */
 function setDriving(on: boolean): void {
   ui.tools.disabled = on;
@@ -313,11 +367,15 @@ function startDriving(mode: "AI" | "KEYS"): void {
   sim.population = Number(ui.population.value);
   sim.mutation = Number(ui.mutation.value);
   if (!sim.begin(mode)) {
-    announce("Add a start marking first: pick Start, then click a lane.");
+    announce(sim.start ? "The start marking isn't on a road the cars can drive." : "Add a start marking first: pick Start, then click a lane.");
     return;
   }
   setDriving(true);
-  announce(mode === "KEYS" ? "You're driving. Use the arrow keys or W, A, S, D." : `Generation ${sim.generation} is on the road.`);
+  announce(
+    mode === "KEYS"
+      ? "You're driving. Use the arrow keys or W, A, S, D. Follow the dotted route."
+      : `Generation ${sim.generation} is on the road${sim.route?.arrives ? ", heading for the target" : " (no target, so they drive as far as the roads go)"}.`,
+  );
   canvas.focus();
 }
 
@@ -338,6 +396,17 @@ ui.forget.addEventListener("click", () => {
   sim.forget();
   save(PARENT_KEY, null);
   announce("Learning reset. The next generation starts from random brains.");
+});
+
+ui.pretrained.addEventListener("click", () => {
+  sim.adopt({ ...PRETRAINED });
+  save(PARENT_KEY, sim.parent);
+  announce("Loaded the trained brain. It follows its lane, stops at stop signs and waits for red lights.");
+});
+
+ui.speed.addEventListener("change", (e) => {
+  const v = (e.target as HTMLInputElement).value;
+  stepsPerFrame = v === "max" ? Infinity : Number(v);
 });
 
 ui.population.addEventListener("input", () => (ui.populationOut.value = ui.population.value));

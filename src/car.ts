@@ -11,6 +11,15 @@ export class Car {
   damaged = false;
   /** Body color for traffic; the course gives each traffic car a random hue. */
   color?: string;
+  /**
+   * Lane assist. When set, it returns the heading the car should hold; a fixed controller then
+   * steers toward it, and the brain only chooses throttle and brake (outputs 0 and 3) plus
+   * lane changes (outputs 1 and 2, read by the simulation). Real driving stacks split the same way:
+   * a learned planner decides, an engineered controller steers.
+   */
+  assist?: (car: Car) => number;
+  /** The brain's last outputs: forward, left (or change lane left), right (or change lane right), reverse. */
+  outputs: number[] = [0, 0, 0, 0];
   polygon: Point[] = [];
   controls: Controls;
   sensor?: Sensor;
@@ -26,6 +35,8 @@ export class Car {
   private odometer = 0;
   private readonly startY: number;
   private framesSinceProgress = 0;
+  /** Frames an AI car may go without progress before it is retired. The world sim raises it so cars can wait at red lights. */
+  stallFrames = STALL_FRAMES;
 
   constructor(
     public x: number,
@@ -36,15 +47,19 @@ export class Car {
     public maxSpeed = 3,
     private acceleration = 0.2,
     private friction = 0.05,
+    /** Inputs beyond the ray sensors (lane position, heading, speed...). 0 reproduces the course's brain. */
+    public extraInputs = 0,
+    hidden = 6,
   ) {
     this.startY = y;
     this.controls = new Controls(type);
     if (type !== "DUMMY") this.sensor = new Sensor(this);
-    if (type === "AI") this.brain = new NeuralNetwork([this.sensor!.rayCount, 6, 4]);
+    if (type === "AI") this.brain = new NeuralNetwork([this.sensor!.rayCount + extraInputs, hidden, 4]);
     this.polygon = this.createPolygon();
   }
 
-  update(borders: Point[][], traffic: Car[]): void {
+  /** `extra` feeds the brain anything beyond the rays; its length must match `extraInputs`. */
+  update(borders: Point[][], traffic: Car[], extra: number[] = []): void {
     if (!this.damaged) {
       this.move();
       this.polygon = this.createPolygon();
@@ -55,11 +70,23 @@ export class Car {
       this.sensor.update(borders, traffic);
       // The course keeps thinking after a crash, so the network view stays live.
       if (this.brain) {
-        const [forward, left, right, reverse] = NeuralNetwork.feedForward(this.sensor.inputs(), this.brain);
+        const out = NeuralNetwork.feedForward(
+          extra.length ? this.sensor.inputs().concat(extra) : this.sensor.inputs(),
+          this.brain,
+        );
+        this.outputs = out.slice();
+        const [forward, left, right, reverse] = out;
         this.controls.forward = forward === 1;
-        this.controls.left = left === 1;
-        this.controls.right = right === 1;
         this.controls.reverse = reverse === 1;
+        if (this.assist) {
+          // Steer toward the assist's heading; the dead band stops the wheel from chattering.
+          const diff = Math.atan2(Math.sin(this.assist(this) - this.angle), Math.cos(this.assist(this) - this.angle));
+          this.controls.left = diff > 0.015;
+          this.controls.right = diff < -0.015;
+        } else {
+          this.controls.left = left === 1;
+          this.controls.right = right === 1;
+        }
       }
     }
   }
@@ -71,7 +98,7 @@ export class Car {
     if (distance > this.progress + 1) {
       this.progress = distance;
       this.framesSinceProgress = 0;
-    } else if (this.type === "AI" && ++this.framesSinceProgress > STALL_FRAMES) {
+    } else if (this.type === "AI" && ++this.framesSinceProgress > this.stallFrames) {
       this.damaged = true;
     }
   }

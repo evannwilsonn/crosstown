@@ -30,6 +30,14 @@
           </dl>
         </section>
 
+        <section class="panel" aria-labelledby="chart-title">
+          <div class="panel-head">
+            <h2 id="chart-title">Learning curve</h2>
+            <p class="legend"><span class="swatch swatch--pos"></span>Lead on traffic</p>
+          </div>
+          <canvas id="chart" aria-label="Chart of how far ahead of traffic each generation's leader got."></canvas>
+        </section>
+
         <section class="panel brain" aria-labelledby="brain-title">
           <div class="panel-head">
             <h2 id="brain-title">Leader's brain</h2>
@@ -38,7 +46,7 @@
               <span class="swatch swatch--neg"></span>Inhibits
             </p>
           </div>
-          <canvas id="brain" aria-label="Neural network of the leading car. Five sensor inputs at the bottom, six hidden neurons, four outputs at the top: forward, left, right, reverse."></canvas>
+          <canvas id="brain" aria-label="Neural network of the leading car. Five sensor inputs plus speed, lane and lane-change inputs at the bottom, eight hidden neurons, four outputs at the top: throttle, change lane left, change lane right, brake."></canvas>
         </section>
 
         <section class="panel controls" aria-labelledby="controls-title">
@@ -65,6 +73,7 @@
             <label><input type="radio" name="speed" value="1" checked /><span>1×</span></label>
             <label><input type="radio" name="speed" value="3" /><span>3×</span></label>
             <label><input type="radio" name="speed" value="8" /><span>8×</span></label>
+            <label><input type="radio" name="speed" value="max" /><span>Max</span></label>
           </fieldset>
 
           <label class="toggle">
@@ -75,12 +84,17 @@
           <div class="actions">
             <button id="next" class="btn btn--primary" type="button">Next generation</button>
             <button id="drive" class="btn" type="button" aria-pressed="false">Drive it yourself</button>
+            <button id="pretrained" class="btn" type="button">Load trained brain</button>
+            <label class="btn file-btn">
+              <input id="import" type="file" accept=".json,application/json" />
+              Import brain
+            </label>
             <button id="download" class="btn btn--quiet" type="button">Copy brain JSON</button>
             <button id="forget" class="btn btn--quiet" type="button">Reset learning</button>
           </div>
         </section>
 
-        <p id="status" class="status" role="status" aria-live="polite">Generation 1 starts from random brains. Give it a few runs.</p>
+        <p id="status" class="status" role="status" aria-live="polite">Loaded a brain trained offline. Press Reset learning to watch cars learn from scratch.</p>
       </aside>
     </div>
     <script type="module" src="/src/main.ts"></script>

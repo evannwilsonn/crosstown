@@ -110,6 +110,7 @@ body {
 .swatch--neg { background: var(--sign-blue); margin-left: 6px; }
 
 #brain { display: block; width: 100%; height: 200px; margin-top: 8px; }
+#chart { display: block; width: 100%; height: 110px; margin-top: 8px; }
 
 .controls { display: grid; gap: 16px; }
 

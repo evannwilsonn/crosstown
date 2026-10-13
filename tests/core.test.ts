@@ -144,3 +144,32 @@ describe("traffic layouts", () => {
     }
   });
 });
+
+describe("lane discipline and the trained brain", () => {
+  it("rejects brains of the wrong shape", async () => {
+    const { isParent } = await import("../src/simulation");
+    const { NeuralNetwork } = await import("../src/network");
+    expect(isParent({ brain: new NeuralNetwork([8, 8, 4]).toJSON(), progress: 0 })).toBe(true);
+    expect(isParent({ brain: new NeuralNetwork([5, 6, 4]).toJSON(), progress: 0 })).toBe(false);
+    expect(isParent({ progress: 0 })).toBe(false);
+    expect(isParent(null)).toBe(false);
+  });
+
+  it("the shipped brain clears the course alone, without crashing, mostly inside a lane", async () => {
+    const { Simulation, isParent } = await import("../src/simulation");
+    const brain = (await import("../src/pretrained/highway.json")).default;
+    expect(isParent(brain)).toBe(true);
+    const sim = new Simulation(0, 210, { population: 1, mutation: 0, seed: 2026, layout: "course" }, brain as never);
+    let crashed = false;
+    let lane = 0;
+    for (let f = 0; f < 3000 && sim.generation === 1; f++) {
+      crashed ||= sim.cars[0].damaged;
+      lane = sim.inLaneShare(sim.cars[0]);
+      sim.step();
+    }
+    expect(crashed).toBe(false);
+    expect(sim.lastCleared).toBe(true);
+    expect(lane).toBeGreaterThan(0.6);
+    expect(sim.history[0].cleared).toBe(true);
+  });
+});
