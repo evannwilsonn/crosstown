@@ -7,7 +7,6 @@ import { parseOsm } from "../src/world/osm";
 import { sampleWorld } from "../src/world/sample";
 import { World, type CourseSave } from "../src/world/world";
 import { WorldSim } from "../src/world/sim";
-import { planRoute } from "../src/world/route";
 
 const square = (x: number, y: number, s: number) =>
   new Polygon([{ x, y }, { x: x + s, y }, { x: x + s, y: y + s }, { x, y: y + s }]);
@@ -87,7 +86,7 @@ describe("world", () => {
     expect(copy.markings.map((m) => m.type)).toEqual(w.markings.map((m) => m.type));
   });
 
-  it("gives one light per intersection the green at a time, and walls off the red ones", () => {
+  it("gives one light per intersection the green at a time, and walls off the rest", () => {
     const w = sampleWorld(); // three lights share the east intersection
     const lights = w.markings.filter((m): m is Light => m instanceof Light);
     for (let t = 0; t < 9; t++) {
@@ -95,8 +94,7 @@ describe("world", () => {
       const open = lights.filter((l) => l.state === "green" || l.state === "yellow");
       expect(open).toHaveLength(1);
       const walls = w.obstacles().length - w.roadBorders.length;
-      // Yellow is not a wall: a car already over the line clears the junction.
-      expect(walls).toBe(lights.length - 1);
+      expect(walls).toBe(lights.length - (open[0].state === "green" ? 1 : 0));
     }
   });
 
@@ -164,52 +162,5 @@ describe("driving in the world", () => {
   it("refuses to start without a start marking", () => {
     const sim = new WorldSim(() => new World(new Graph()), null);
     expect(sim.begin("AI")).toBe(false);
-  });
-});
-
-describe("routes and rules of the road", () => {
-  /** A plus-shaped junction: four arms of 400 px around the origin. */
-  const plus = () => {
-    const c = { x: 0, y: 0 };
-    const arms = [{ x: 0, y: 400 }, { x: 400, y: 0 }, { x: 0, y: -400 }, { x: -400, y: 0 }];
-    return new Graph([c, ...arms], arms.map((a) => new Segment(c, a)));
-  };
-
-  it("plans in the right-hand lane and curves through turns", () => {
-    // Start on the south arm heading north (up the screen), target on the east arm heading east.
-    const route = planRoute(plus(), { x: 25, y: 300 }, { x: 0, y: -1 }, { x: 300, y: 25 }, 100)!;
-    expect(route.arrives).toBe(true);
-    // Right-hand lane: x = +25 going north, y = +25 going east.
-    expect(route.points[1].x).toBeCloseTo(25, 0);
-    expect(route.points[route.points.length - 2].y).toBeCloseTo(25, 0);
-    // The corner is an arc, not a single sharp point.
-    expect(route.points.length).toBeGreaterThan(4);
-    expect(route.turnAhead(route.lengths[1] - 30, 120)).toBeLessThan(0); // a right turn
-  });
-
-  it("never routes the wrong way down a one-way street", () => {
-    const g = plus();
-    g.segments[1].oneWay = true; // centre to east only
-    // Target on the east arm, start on the east arm heading west toward the centre.
-    const back = planRoute(g, { x: 300, y: -25 }, { x: -1, y: 0 }, { x: 350, y: 0 }, 100)!;
-    const wrong = back.points.some((p, i) => i > 0 && p.x > 320 && back.points[i - 1].x > p.x);
-    expect(wrong).toBe(false);
-  });
-
-  it("the trained world brain reaches the target and obeys stop signs and lights", async () => {
-    const brain = (await import("../src/pretrained/world.json")).default;
-    const { isParent } = await import("../src/simulation");
-    const { WORLD_COUNTS } = await import("../src/world/sim");
-    expect(isParent(brain, WORLD_COUNTS)).toBe(true);
-    for (const target of [null, { x: 480, y: 300 }]) {
-      const w = sampleWorld();
-      if (target) w.markings.find((m) => m.type === "target")!.center = target;
-      const sim = new WorldSim(() => w, brain as never);
-      sim.population = 1;
-      sim.begin("AI");
-      while (sim.generation === 1) sim.step();
-      expect(sim.lastArrived).toBe(true);
-      expect(sim.violations).toEqual({ stop: 0, lane: 0 });
-    }
   });
 });

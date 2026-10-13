@@ -254,15 +254,11 @@ export class World {
     }
   }
 
-  /**
-   * Road edges plus the stop lines of red lights, as [p1, p2] pairs for car sensors. The course
-   * also walls off yellow, which crushes a car already over the line when the light changes;
-   * here yellow means what it does on a real road: stop if you can, clear the junction if you can't.
-   */
+  /** Road edges plus the stop lines of red and yellow lights, as [p1, p2] pairs for car sensors. */
   obstacles(): Point[][] {
     const out: Point[][] = this.roadBorders.map((s) => [s.p1, s.p2]);
     for (const m of this.markings) {
-      if (m instanceof Light && m.state === "red") {
+      if (m instanceof Light && (m.state === "red" || m.state === "yellow")) {
         const line = m.frontLine();
         out.push([line.p1, line.p2]);
       }

@@ -1,21 +1,16 @@
 import "./style.css";
 import { NeuralNetwork, type NetworkJSON } from "./network";
-import { Simulation, isParent, type Parent } from "./simulation";
-import pretrained from "./pretrained/highway.json";
+import { Simulation, type Parent } from "./simulation";
 import { drawNetwork } from "./visualizer";
 
-// v3: lane assist changed the brain to 8 inputs and 8 hidden neurons.
-const STORAGE_KEY = "sdc.parent.v3";
-/** A brain trained offline with scripts/train.ts that clears the course layout. */
-const PRETRAINED = pretrained as Parent;
+// v2: fitness changed from raw distance to distance gained on traffic.
+const STORAGE_KEY = "sdc.parent.v2";
 const ROAD_WIDTH = 210;
 
 const $ = <T extends HTMLElement>(sel: string) => document.querySelector(sel) as T;
 
 const roadCanvas = $<HTMLCanvasElement>("#road");
 const brainCanvas = $<HTMLCanvasElement>("#brain");
-const chartCanvas = $<HTMLCanvasElement>("#chart");
-const chartCtx = chartCanvas.getContext("2d")!;
 const roadCtx = roadCanvas.getContext("2d")!;
 const brainCtx = brainCanvas.getContext("2d")!;
 
@@ -35,8 +30,6 @@ const ui = {
   next: $<HTMLButtonElement>("#next"),
   forget: $<HTMLButtonElement>("#forget"),
   download: $<HTMLButtonElement>("#download"),
-  pretrained: $<HTMLButtonElement>("#pretrained"),
-  importBrain: $<HTMLInputElement>("#import"),
   status: $("#status"),
   brainNote: $("#brain-note"),
 };
@@ -58,11 +51,9 @@ const palette = {
 function loadParent(): Parent | null {
   try {
     const raw = localStorage.getItem(STORAGE_KEY);
-    if (raw === null) return PRETRAINED;
-    const p: unknown = JSON.parse(raw);
-    return isParent(p) ? p : null;
+    return raw ? (JSON.parse(raw) as Parent) : null;
   } catch {
-    return PRETRAINED;
+    return null;
   }
 }
 function saveParent(p: Parent | null): void {
@@ -81,9 +72,7 @@ const sim = new Simulation(0, ROAD_WIDTH, {
   layout: "course",
 }, loadParent());
 
-/** Steps per frame, or Infinity for Max: as many steps as fit in a frame's time budget. */
 let stepsPerFrame = 1;
-const MAX_BUDGET_MS = 14;
 let viewW = 0;
 let viewH = 0;
 
@@ -99,11 +88,9 @@ function fitCanvas(canvas: HTMLCanvasElement, ctx: CanvasRenderingContext2D): [n
 function resize(): void {
   [viewW, viewH] = fitCanvas(roadCanvas, roadCtx);
   fitCanvas(brainCanvas, brainCtx);
-  fitCanvas(chartCanvas, chartCtx);
 }
 new ResizeObserver(resize).observe(roadCanvas);
 new ResizeObserver(() => fitCanvas(brainCanvas, brainCtx)).observe(brainCanvas);
-new ResizeObserver(() => { fitCanvas(chartCanvas, chartCtx); chartDrawn = -1; }).observe(chartCanvas);
 
 
 function announce(msg: string): void {
@@ -155,46 +142,6 @@ function drawBrain(now: number): void {
   }, -now / 50);
 }
 
-/** Bars of the leader's lead on traffic per generation; cleared generations are drawn in green. */
-let chartDrawn = -1;
-function drawChart(): void {
-  if (chartDrawn === sim.history.length) return;
-  chartDrawn = sim.history.length;
-  const ctx = chartCtx;
-  const { width, height } = chartCanvas.getBoundingClientRect();
-  ctx.clearRect(0, 0, width, height);
-  const pad = { l: 4, r: 4, t: 14, b: 14 };
-  const w = width - pad.l - pad.r;
-  const h = height - pad.t - pad.b;
-  ctx.font = "600 10px Overpass, system-ui, sans-serif";
-  ctx.fillStyle = palette.concrete;
-  ctx.strokeStyle = palette.shoulder;
-  ctx.beginPath();
-  ctx.moveTo(pad.l, pad.t + h + 0.5);
-  ctx.lineTo(pad.l + w, pad.t + h + 0.5);
-  ctx.stroke();
-  const rows = sim.history.slice(-80);
-  if (!rows.length) {
-    ctx.fillText("Finished generations show up here.", pad.l, pad.t + h / 2);
-    return;
-  }
-  const top = Math.max(100, ...rows.map((r) => r.lead));
-  const slot = w / Math.max(rows.length, 20);
-  rows.forEach((r, i) => {
-    const bh = (Math.max(0, r.lead) / top) * h;
-    ctx.fillStyle = r.cleared ? palette.green : palette.yellow;
-    ctx.fillRect(pad.l + i * slot + 1, pad.t + h - bh, Math.max(1, slot - 2), bh);
-  });
-  ctx.fillStyle = palette.white;
-  ctx.textBaseline = "top";
-  ctx.fillText(`${Math.round(top / 10)} m ahead`, pad.l, 0);
-  ctx.textBaseline = "alphabetic";
-  ctx.fillStyle = palette.concrete;
-  ctx.fillText(`gen ${rows[0].generation}`, pad.l, height - 2);
-  const last = `gen ${rows[rows.length - 1].generation}`;
-  ctx.fillText(last, pad.l + w - ctx.measureText(last).width, height - 2);
-}
-
 let lastStats = 0;
 function updateStats(now: number): void {
   if (now - lastStats < 120) return;
@@ -203,17 +150,15 @@ function updateStats(now: number): void {
   ui.generation.textContent = keys ? "Manual" : String(sim.generation);
   ui.alive.textContent = keys ? "1" : `${sim.alive} of ${sim.cars.length}`;
   ui.run.textContent = String(Math.max(sim.bestPassed, sim.passedBy(sim.leader)));
-  ui.best.textContent = sim.parent
-    ? `${sim.parent.passed ?? 0} cars, ${Math.round((sim.parent.inLane ?? 0) * 100)}% in lane`
-    : "None yet";
+  ui.best.textContent = sim.parent ? `${sim.parent.passed ?? 0} cars` : "None yet";
 }
 
 function frame(now: number): void {
-  const t0 = performance.now();
-  for (let i = 0; i < stepsPerFrame && performance.now() - t0 < MAX_BUDGET_MS; i++) {
+  for (let i = 0; i < stepsPerFrame; i++) {
+    const cleared = sim.clearedCourse();
     if (sim.step()) {
       saveParent(sim.parent);
-      if (sim.lastCleared) announce(`Generation ${sim.generation - 1} cleared all seven cars. Try Endless traffic for a harder road.`);
+      if (cleared) announce(`Generation ${sim.generation - 1} cleared all seven cars. Try Endless traffic for a harder road.`);
       else
         announce(
           sim.parent
@@ -224,7 +169,6 @@ function frame(now: number): void {
   }
   drawRoad();
   drawBrain(now);
-  drawChart();
   updateStats(now);
   requestAnimationFrame(frame);
 }
@@ -255,8 +199,7 @@ ui.layout.addEventListener("change", (e) => {
 });
 
 ui.speed.addEventListener("change", (e) => {
-  const v = (e.target as HTMLInputElement).value;
-  stepsPerFrame = v === "max" ? Infinity : Number(v);
+  stepsPerFrame = Number((e.target as HTMLInputElement).value);
 });
 
 ui.drive.addEventListener("click", () => {
@@ -282,42 +225,6 @@ ui.forget.addEventListener("click", () => {
   announce("Learning reset. Generation 1 starts from random brains.");
 });
 
-function useBrain(p: Parent, msg: string): void {
-  sim.parent = { ...p };
-  sim.generation = 1;
-  sim.stagnant = 0;
-  sim.history = [];
-  sim.reset();
-  saveParent(sim.parent);
-  announce(msg);
-}
-
-ui.pretrained.addEventListener("click", () => {
-  if (sim.settings.layout !== "course") {
-    (ui.layout.querySelector('input[value="course"]') as HTMLInputElement).checked = true;
-    sim.settings.layout = "course";
-  }
-  useBrain(PRETRAINED, "Loaded the trained brain. Watch the yellow car weave through the seven cars.");
-});
-
-ui.importBrain.addEventListener("change", async () => {
-  const file = ui.importBrain.files?.[0];
-  ui.importBrain.value = "";
-  if (!file) return;
-  try {
-    const data: unknown = JSON.parse(await file.text());
-    // Accept either a saved parent or a bare brain from Copy brain JSON.
-    const p = isParent(data) ? data : isParent({ brain: data, progress: 0 }) ? ({ brain: data, progress: 0 } as Parent) : null;
-    if (!p) {
-      announce("That file isn't a brain for this network (8 inputs, 8 hidden, 4 outputs).");
-      return;
-    }
-    useBrain(p, `Imported ${file.name}. New generations breed from it.`);
-  } catch {
-    announce("Couldn't read that file as JSON.");
-  }
-});
-
 ui.download.addEventListener("click", async () => {
   const brain: NetworkJSON | undefined = sim.parent?.brain ?? sim.leader.brain?.toJSON();
   if (!brain) return;
@@ -333,12 +240,5 @@ ui.download.addEventListener("click", async () => {
 (window as unknown as { sim: Simulation; NeuralNetwork: typeof NeuralNetwork }).sim = sim;
 (window as unknown as { NeuralNetwork: typeof NeuralNetwork }).NeuralNetwork = NeuralNetwork;
 
-announce(
-  sim.parent === PRETRAINED
-    ? "Loaded a brain trained offline. Press Reset learning to watch cars learn from scratch."
-    : sim.parent
-      ? "Picked up from the brain saved in this browser."
-      : "Generation 1 starts from random brains. Give it a few runs.",
-);
 resize();
 requestAnimationFrame(frame);
