@@ -1,8 +1,10 @@
 import "./style.css";
 import { Genome } from "./neat";
-import { CLEARS_TO_PASS, INPUTS, levelSpec, Simulation, type SavedState } from "./simulation";
+import { CLEARS_TO_PASS, INPUTS, levelSpec, roadShape, Simulation, type SavedState } from "./simulation";
 import { drawGenome } from "./visualizer";
 import { drawLearningCurve } from "./chart";
+import { themeFor } from "./themes";
+import type { Car } from "./car";
 
 // Learning lasts for the tab session: a refresh or leaving and coming back in the same tab picks
 // up where it left off; closing the tab or window starts over from random brains.
@@ -110,11 +112,36 @@ function announce(msg: string): void {
   ui.status.textContent = msg;
 }
 
+/** Two beams of light ahead of a car, for night roads. */
+function headlights(ctx: CanvasRenderingContext2D, car: Car): void {
+  if (car.damaged) return;
+  ctx.save();
+  ctx.translate(car.x, car.y);
+  ctx.rotate(-car.angle);
+  const beam = ctx.createLinearGradient(0, -car.height / 2, 0, -car.height / 2 - 120);
+  beam.addColorStop(0, "rgba(255, 240, 200, 0.28)");
+  beam.addColorStop(1, "rgba(255, 240, 200, 0)");
+  ctx.fillStyle = beam;
+  ctx.beginPath();
+  ctx.moveTo(-car.width / 2 + 3, -car.height / 2);
+  ctx.lineTo(car.width / 2 - 3, -car.height / 2);
+  ctx.lineTo(car.width / 2 + 26, -car.height / 2 - 120);
+  ctx.lineTo(-car.width / 2 - 26, -car.height / 2 - 120);
+  ctx.closePath();
+  ctx.fill();
+  ctx.restore();
+}
+
 let camX = 0;
 function drawRoad(): void {
   const ctx = roadCtx;
   const leader = sim.leader;
+  const theme = themeFor(sim.levelSpec.road, sim.settings.seed);
   ctx.clearRect(0, 0, viewW, viewH);
+  if (theme.ground) {
+    ctx.fillStyle = theme.ground;
+    ctx.fillRect(0, 0, viewW, viewH);
+  }
   ctx.save();
   const scale = Math.min(1.4, Math.max(1, viewW / (ROAD_WIDTH + 120)));
   ctx.translate(viewW / 2, viewH * 0.74);
@@ -127,15 +154,27 @@ function drawRoad(): void {
   const viewBottom = leader.y + (viewH * 0.26) / scale;
   sim.road.draw(
     ctx,
-    { surface: palette.asphalt, shoulder: palette.shoulder, lane: palette.white, edge: palette.white, center: palette.yellow, cone: palette.orange },
+    {
+      surface: theme.asphalt || palette.asphalt,
+      shoulder: theme.shoulder || palette.shoulder,
+      lane: palette.white,
+      edge: palette.white,
+      center: palette.yellow,
+      cone: palette.orange,
+    },
     viewTop,
     viewBottom,
   );
+  theme.scenery(ctx, sim.road, viewTop, viewBottom, sim.settings.seed + sim.levelSpec.road);
+  if (theme.night) {
+    for (const car of sim.course.near(leader.y, viewH / scale)) headlights(ctx, car);
+    headlights(ctx, leader);
+  }
 
   for (const car of sim.course.near(leader.y, viewH / scale)) car.draw(ctx, car.color ?? palette.concrete);
 
   ctx.globalAlpha = 0.16;
-  for (const car of sim.cars) if (car !== leader) car.draw(ctx, car.damaged ? palette.concrete : palette.white);
+  for (const car of sim.cars) if (car !== leader) car.draw(ctx, car.damaged ? palette.concrete : theme.ghost || palette.white);
   ctx.globalAlpha = 1;
 
   leader.draw(ctx, leader.damaged ? palette.concrete : palette.yellow, ui.sensors.checked ? palette.yellow : undefined);
@@ -193,12 +232,21 @@ function updateStats(now: number): void {
   ui.brainNote.textContent = brainSummary();
 }
 
+function roadShapeText(road: number): string {
+  const shape = roadShape(road, sim.settings.seed);
+  const parts = [`${shape.laneCount} lanes`];
+  if (shape.bends.length) parts.push("curves");
+  if (shape.closures) parts.push("construction zones");
+  return parts.join(", ");
+}
+
 function describeGeneration(): string {
   const s = sim.last;
   if (!s) return "Generation 1: random brains with no hidden neurons, sensors wired straight to the controls.";
   if (s.levelUp) {
     const next = levelSpec(s.level + 1);
-    const road = next.road !== levelSpec(s.level).road ? " New road." : "";
+    const nextTheme = themeFor(next.road, sim.settings.seed);
+    const road = next.road !== levelSpec(s.level).road ? ` New road: ${nextTheme.name}, ${roadShapeText(next.road)}.` : "";
     return `Generation ${s.generation} cleared level ${s.level}.${road} Level ${next.number}: ${next.name}. Pass ${next.goal} cars on ${CLEARS_TO_PASS} different layouts.`;
   }
   if (s.cleared) return `Generation ${s.generation} passed ${s.passed} cars and cleared this layout: ${s.clears} of ${CLEARS_TO_PASS} needed for level ${s.level}.`;

@@ -55,7 +55,8 @@ export class Road {
   /** Sideways position of the road's middle at a point along it. */
   centerX(y: number): number {
     if (!this.shape.bends.length) return this.x;
-    const fade = Math.max(0, Math.min(1, (-y - STRAIGHT_START) / CURVE_FADE));
+    const t = Math.max(0, Math.min(1, (-y - STRAIGHT_START) / CURVE_FADE));
+    const fade = t * t * (3 - 2 * t); // smoothstep: no kink where the curves finish fading in
     if (fade === 0) return this.x;
     let dx = 0;
     for (const b of this.shape.bends) dx += b.amplitude * Math.sin((y / b.wavelength) * Math.PI * 2 + b.phase);
