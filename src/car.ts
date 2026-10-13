@@ -28,6 +28,10 @@ export class Car {
   private odometer = 0;
   private readonly startY: number;
   private framesSinceProgress = 0;
+  /** Frames since this car last made progress: a car stopped in place counts up. */
+  get idleFrames(): number {
+    return this.framesSinceProgress;
+  }
 
   constructor(
     public x: number,

@@ -127,6 +127,8 @@ const ARRIVE_RADIUS = 40;
 /** Cars may wait this long without progress, enough for a full red light. */
 const CAR_STALL_FRAMES = 600;
 const SENSOR_REACH = 220;
+/** A car that hasn't made progress for this long (1 s) isn't followed while others are moving. */
+const FOLLOW_IDLE_FRAMES = 60;
 
 function near(o: Point[], car: Car): boolean {
   const [a, b] = o;
@@ -460,7 +462,8 @@ export class WorldSim {
       t.remaining = g.remaining;
       t.waypoint = g.waypoint;
       if (g.remaining < t.best) t.best = g.remaining;
-      if (!car.damaged && this.destination && distance(car, this.destination) < ARRIVE_RADIUS) {
+      // Level 1 only asks cars to keep driving; there's nothing to arrive at.
+      if (!car.damaged && this.destination && this.levelSpec.goal !== "survive" && distance(car, this.destination) < ARRIVE_RADIUS) {
         t.arrivedAt = this.frames;
         t.best = 0;
         car.speed = 0;
@@ -468,8 +471,13 @@ export class WorldSim {
     });
 
     this.leader = this.cars.reduce((a, b) => (this.total(b) > this.total(a) ? b : a));
-    const active = this.cars.filter((c) => !c.damaged || this.trips.get(c)?.arrivedAt !== undefined);
-    this.followed = active.length ? active.reduce((a, b) => (this.total(b) > this.total(a) ? b : a)) : this.leader;
+    // Follow a car that is really driving: arrived, or still making progress. A car stopped in
+    // place still counts as driving until it stalls out, but isn't worth watching.
+    const best = (cars: Car[]) => cars.reduce((a, b) => (this.total(b) > this.total(a) ? b : a));
+    const arrived = (c: Car) => this.trips.get(c)?.arrivedAt !== undefined;
+    const moving = this.cars.filter((c) => arrived(c) || (!c.damaged && c.idleFrames < FOLLOW_IDLE_FRAMES));
+    const alive = this.cars.filter((c) => !c.damaged);
+    this.followed = moving.length ? best(moving) : alive.length ? best(alive) : this.leader;
     if (this.mode === "KEYS") return false;
 
     // Survival follows the leader; trips run until no car is still getting closer.

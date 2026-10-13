@@ -225,10 +225,29 @@ describe("world levels and navigation", () => {
     a.progress = 500;
     a.damaged = true;
     b.progress = 100;
+    b.damaged = false;
     sim.step();
     expect(sim.leader).toBe(a);
     expect(sim.followed).not.toBe(a);
     expect(sim.followed!.damaged).toBe(false);
+  });
+
+  it("doesn't follow a car that has stopped in place while another is moving", () => {
+    const w = sampleWorld();
+    const sim = new WorldSim(() => w);
+    sim.population = 2;
+    sim.begin("AI");
+    const [stopped, mover] = sim.cars;
+    stopped.brain = mover.brain = undefined;
+    stopped.progress = 760;
+    mover.progress = 0;
+    for (let i = 0; i < 90; i++) {
+      stopped.speed = 0;
+      mover.speed = 1;
+      sim.step();
+    }
+    expect(stopped.damaged).toBe(false);
+    expect(sim.followed).toBe(mover);
   });
 
   it("random-trip levels score every brain on several trips before breeding", async () => {
