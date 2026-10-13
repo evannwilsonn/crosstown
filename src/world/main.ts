@@ -5,7 +5,7 @@ import type { MarkingType } from "./markings";
 import { drawMinimap } from "./minimap";
 import { isOsmData, OVERPASS_QUERY, parseOsm } from "./osm";
 import { sampleWorld } from "./sample";
-import { WORLD_INPUTS, WorldSim, type WorldSaved } from "./sim";
+import { SURVIVE_FRAMES, WORLD_INPUTS, WorldSim, type WorldSaved } from "./sim";
 import { generateMap } from "./mapgen";
 import { WORLD_THEMES, type WorldThemeName } from "./worldThemes";
 import { MAX_SHARE_BYTES, startSharing, type Sharing } from "./share";
@@ -271,7 +271,7 @@ function showLevelMap(map: number): void {
   setSource("drawn");
   markingCount = world.markings.length;
   seenVersion = world.graph.version;
-  if (!sim.leader) viewport.fit(world.graph.points);
+  if (!sim.followed) viewport.fit(world.graph.points);
 }
 
 function currentMap(): SavedWorld {
@@ -399,10 +399,10 @@ function frame(nowMs: number): void {
     saveState();
     announce(describeGeneration());
   }
-  if (sim.leader && !viewport.isPanning) {
+  if (sim.followed && !viewport.isPanning) {
     viewport.center = {
-      x: viewport.center.x + (sim.leader.x - viewport.center.x) * 0.12,
-      y: viewport.center.y + (sim.leader.y - viewport.center.y) * 0.12,
+      x: viewport.center.x + (sim.followed.x - viewport.center.x) * 0.12,
+      y: viewport.center.y + (sim.followed.y - viewport.center.y) * 0.12,
     };
   }
 
@@ -421,11 +421,11 @@ function frame(nowMs: number): void {
   if (sim.mode !== "off" && sim.levelSpec.goal !== "survive") drawTrip();
 
   ctx.globalAlpha = 0.2;
-  for (const car of sim.cars) if (car !== sim.leader) car.draw(ctx, car.damaged ? paint.items.wallEdge : paint.white);
+  for (const car of sim.cars) if (car !== sim.followed) car.draw(ctx, car.damaged ? paint.items.wallEdge : paint.white);
   ctx.globalAlpha = 1;
-  if (sim.leader) {
-    const crashed = sim.leader.damaged;
-    sim.leader.draw(ctx, crashed ? paint.items.wallEdge : paint.yellow, ui.sensors.checked ? paint.yellow : undefined);
+  if (sim.followed) {
+    const crashed = sim.followed.damaged;
+    sim.followed.draw(ctx, crashed ? paint.items.wallEdge : paint.yellow, ui.sensors.checked ? paint.yellow : undefined);
   }
 
   world.drawItems(ctx, viewPoint, radius, themed.items);
@@ -437,7 +437,7 @@ function frame(nowMs: number): void {
 
   drawMinimap(
     miniCtx, mini.clientWidth, mini.clientHeight, world.graph, viewport.center,
-    { width: w / viewport.zoom, height: h / viewport.zoom }, sim.cars, sim.leader,
+    { width: w / viewport.zoom, height: h / viewport.zoom }, sim.cars, sim.followed,
     { road: paint.white, car: paint.yellow, view: paint.yellow },
   );
 
@@ -449,21 +449,21 @@ function frame(nowMs: number): void {
     const driving = sim.mode !== "off";
     ui.generation.textContent = !driving ? "Parked" : sim.mode === "KEYS" ? "Manual" : String(sim.generation);
     ui.alive.textContent = !driving ? "0" : `${sim.alive} of ${sim.cars.length}`;
-    ui.run.textContent = !driving || !sim.leader
+    ui.run.textContent = !driving || !sim.followed
       ? "0 m"
       : sim.levelSpec.goal === "survive"
-        ? meters(sim.leader.progress)
-        : `${meters(sim.remaining(sim.leader))} to go, ${(sim.frames / 60).toFixed(0)} of ${((sim.timeLimit ?? 0) / 60).toFixed(0)} s${sim.tripsPerGeneration > 1 ? `, trip ${sim.trip + 1}/${sim.tripsPerGeneration}` : ""}`;
+        ? `${meters(sim.followed.progress)}, ${Math.floor(Math.min(sim.frames, SURVIVE_FRAMES) / 60)} of ${SURVIVE_FRAMES / 60} s`
+        : `${meters(sim.remaining(sim.followed))} to go, ${(sim.frames / 60).toFixed(0)} of ${((sim.timeLimit ?? 0) / 60).toFixed(0)} s${sim.tripsPerGeneration > 1 ? `, trip ${sim.trip + 1}/${sim.tripsPerGeneration}` : ""}`;
     ui.level.textContent = sim.custom ? `Your map (levels wait at ${sim.level})` : `${sim.level}: ${sim.levelSpec.name}`;
-    if (sim.mode === "KEYS" && sim.leader && !arrivalAnnounced) {
-      const secs = sim.arrivalSeconds(sim.leader);
+    if (sim.mode === "KEYS" && sim.followed && !arrivalAnnounced) {
+      const secs = sim.arrivalSeconds(sim.followed);
       if (secs !== null) {
         arrivalAnnounced = true;
         const limit = ((sim.timeLimit ?? 0) / 60).toFixed(0);
-        announce(sim.inTime(sim.leader) ? `You made it in ${secs.toFixed(1)} s, inside the ${limit} s limit.` : `You arrived in ${secs.toFixed(1)} s, past the ${limit} s limit.`);
+        announce(sim.inTime(sim.followed) ? `You made it in ${secs.toFixed(1)} s, inside the ${limit} s limit.` : `You arrived in ${secs.toFixed(1)} s, past the ${limit} s limit.`);
       }
     }
-    const g = sim.leader?.brain instanceof Genome ? sim.leader.brain : null;
+    const g = sim.followed?.brain instanceof Genome ? sim.followed.brain : null;
     ui.brainNote.textContent = g ? `${g.hiddenCount} hidden ${g.hiddenCount === 1 ? "neuron" : "neurons"}, ${g.enabledCount} links, ${sim.neat.species.length || 1} species` : "";
   }
   requestAnimationFrame(frame);
@@ -471,7 +471,7 @@ function frame(nowMs: number): void {
 
 function drawBrain(now: number): void {
   const { width, height } = brainCanvas.getBoundingClientRect();
-  const brain = sim.leader?.brain;
+  const brain = sim.followed?.brain;
   if (!(brain instanceof Genome)) {
     brainCtx.clearRect(0, 0, width, height);
     brainCtx.fillStyle = color("--ink-muted");
@@ -500,7 +500,7 @@ function describeLevel(): string {
   }
   const what =
     spec.goal === "survive"
-      ? "drive as long as they can without crashing."
+      ? "keep a car on the road for 45 seconds, covering at least 300 m. Circling in place doesn't count."
       : `reach a random destination before the clock runs out, ${sim.tripsPerGeneration} trips a generation. A GPS input points the way; the brain does all the steering. Clear it by arriving in time on every trip.`;
   return `Level ${spec.number}, ${spec.name}: ${what}`;
 }
@@ -520,7 +520,7 @@ function describeGeneration(): string {
   return `Generation ${s.generation}: ${s.species} species competing.${arrived}`;
 }
 
-/** The destination and the leader's GPS arrow, drawn on the map. */
+/** The destination and the followed car's GPS arrow, drawn on the map. */
 function drawTrip(): void {
   const d = sim.destination;
   if (d) {
@@ -535,7 +535,7 @@ function drawTrip(): void {
       ctx.fill();
     });
   }
-  const leader = sim.leader;
+  const leader = sim.followed;
   const wp = leader ? sim.waypoint(leader) : null;
   if (leader && wp && !leader.damaged) {
     ctx.save();

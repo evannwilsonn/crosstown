@@ -199,6 +199,38 @@ describe("world levels and navigation", () => {
     expect(sim.generation).toBe(2);
   });
 
+  it("level 1 isn't cleared by a car circling at the start for 45 s", () => {
+    const w = sampleWorld();
+    const sim = new WorldSim(() => w);
+    sim.population = 1;
+    sim.begin("AI");
+    const car = sim.cars[0];
+    car.brain = undefined;
+    while (sim.generation === 1) {
+      car.speed = 0.5;
+      car.angle += 0.02;
+      sim.step();
+    }
+    expect(sim.last!.levelUp).toBe(false);
+    expect(sim.level).toBe(1);
+  });
+
+  it("follows the best car still driving once the best one crashes", () => {
+    const w = sampleWorld();
+    const sim = new WorldSim(() => w);
+    sim.population = 3;
+    sim.begin("AI");
+    for (let i = 0; i < 30; i++) sim.step();
+    const [a, b] = sim.cars;
+    a.progress = 500;
+    a.damaged = true;
+    b.progress = 100;
+    sim.step();
+    expect(sim.leader).toBe(a);
+    expect(sim.followed).not.toBe(a);
+    expect(sim.followed!.damaged).toBe(false);
+  });
+
   it("random-trip levels score every brain on several trips before breeding", async () => {
     const { TRIPS_PER_GENERATION } = await import("../src/world/sim");
     const w = sampleWorld();

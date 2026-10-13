@@ -64,7 +64,9 @@ The world builds a town around a road network: road borders, buildings and trees
 
 **Levels never run out:**
 
-1. **Stay on the road.** Fitness is distance driven, as in the course. Cleared when a car is still driving at the 45 s limit.
+1. **Stay on the road for 45 s.** Fitness is distance driven, as in the course. Cleared when a car is still driving at 45 s and has covered at least 300 m away from the start, so circling in place doesn't count.
+
+The camera and the highlighted car follow the best car still driving; a crashed leader still scores and breeds, it just isn't followed.
 2. **Every level after that is timed trips.** Each generation drives three trips to random destinations. A level is cleared when one brain arrives in time on all three. One random trip per generation turned out to be luck: champions were picked on easy trips.
 
 **Fair time limits.** Each trip's limit is worked out from its own route: the ideal time at top speed, plus time for each turn, stop sign and traffic light. That total is multiplied by a factor that shrinks level by level but never goes below 1.3, which stays drivable. Later levels make trips longer and start from random spots. Destinations are never moved closer to make a level easier.

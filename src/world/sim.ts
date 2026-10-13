@@ -54,7 +54,7 @@ const DISTANCE_NAMES = ["Around the block", "Short trips", "Across the neighborh
 
 export function worldLevelSpec(n: number): WorldLevel {
   const map = Math.floor((n - 1) / LEVELS_PER_MAP);
-  if (n <= 1) return { number: 1, name: "Stay on the road", map: 0, goal: "survive", minTrip: 0, timeFactor: 3, randomStart: false };
+  if (n <= 1) return { number: 1, name: "Stay on the road for 45 s", map: 0, goal: "survive", minTrip: 0, timeFactor: 3, randomStart: false };
   const stage = (n - 1) % LEVELS_PER_MAP;
   const tier = Math.max(0, map + stage - 1);
   const timeFactor = Math.max(MIN_TIME_FACTOR, 2.4 - 0.1 * tier);
@@ -115,7 +115,13 @@ export const WORLD_INPUTS = WORLD_RAYS + 2;
 const OUTPUTS = 4;
 const LEADER_PATIENCE = 600;
 /** Level 1 is passed by a car still driving at the time limit. */
-const SURVIVE_FRAMES = 60 * 45;
+export const SURVIVE_FRAMES = 60 * 45;
+/**
+ * Level 1 also needs real ground covered: at least 300 m driven, and at least this far from
+ * the start at some point, so a car circling in place can't clear it.
+ */
+export const SURVIVE_DISTANCE = 3000;
+const SURVIVE_LEAVE_START = 400;
 /** Within this distance of the destination counts as arrived. */
 const ARRIVE_RADIUS = 40;
 /** Cars may wait this long without progress, enough for a full red light. */
@@ -133,6 +139,8 @@ function near(o: Point[], car: Car): boolean {
 }
 
 interface Trip {
+  /** Farthest this car has been from where it started, in a straight line. */
+  far: number;
   segment: number;
   remaining: number;
   waypoint: Point;
@@ -146,7 +154,14 @@ interface Trip {
  */
 export class WorldSim {
   cars: Car[] = [];
+  /** The best-scoring car, crashed or not: what ends a generation early. */
   leader: Car | null = null;
+  /**
+   * The car the page highlights and follows: the best one still driving (or already arrived),
+   * falling back to the leader only once every car has crashed. Display only; it never
+   * changes scoring or breeding.
+   */
+  followed: Car | null = null;
   generation = 1;
   level = 1;
   mode: WorldDriveMode = "off";
@@ -231,6 +246,7 @@ export class WorldSim {
     this.cars.forEach((c) => c.dispose());
     this.cars = [];
     this.leader = null;
+    this.followed = null;
     this.mode = "off";
   }
 
@@ -346,9 +362,10 @@ export class WorldSim {
     this.cars = this.mode === "KEYS" ? [make("KEYS")] : this.neat.genomes.map((g) => make("AI", g));
     const seg = this.nav ? this.nav.nearestSegment(start.center) : -1;
     this.trips = new Map(
-      this.cars.map((c) => [c, { segment: seg, remaining: this.startRemaining, waypoint: this.destination ?? start.center, best: this.startRemaining }]),
+      this.cars.map((c) => [c, { far: 0, segment: seg, remaining: this.startRemaining, waypoint: this.destination ?? start.center, best: this.startRemaining }]),
     );
     this.leader = this.cars[0];
+    this.followed = this.cars[0];
     this.leaderBest = 0;
     this.framesSinceGain = 0;
     this.frames = 0;
@@ -379,6 +396,11 @@ export class WorldSim {
     const limit = this.timeLimit ?? Infinity;
     const onTime = t.arrivedAt !== undefined && t.arrivedAt <= limit ? 1 + (limit - t.arrivedAt) / limit : 0;
     return (covered + onTime) * 1000;
+  }
+
+  /** Level 1: covered real ground, not just circled the start. */
+  survived(car: Car): boolean {
+    return car.progress >= SURVIVE_DISTANCE && (this.trips.get(car)?.far ?? 0) >= SURVIVE_LEAVE_START;
   }
 
   /** True when this car reached the destination within the time limit. */
@@ -430,6 +452,7 @@ export class WorldSim {
       if (t.arrivedAt !== undefined) return;
       if (car.damaged && car.type === "AI") return;
       car.update(obstacles.filter((o) => near(o, car)), [], [car.speed / car.maxSpeed, this.gps(car, t)]);
+      if (this.origin) t.far = Math.max(t.far, distance(car, this.origin.center));
       if (!nav) return;
       // Finding the nearest road is the costly part; each car does it every fourth frame.
       if ((this.frames + i) % 4 === 0 || t.segment < 0) t.segment = nav.nearestSegment(car);
@@ -445,6 +468,8 @@ export class WorldSim {
     });
 
     this.leader = this.cars.reduce((a, b) => (this.total(b) > this.total(a) ? b : a));
+    const active = this.cars.filter((c) => !c.damaged || this.trips.get(c)?.arrivedAt !== undefined);
+    this.followed = active.length ? active.reduce((a, b) => (this.total(b) > this.total(a) ? b : a)) : this.leader;
     if (this.mode === "KEYS") return false;
 
     // Survival follows the leader; trips run until no car is still getting closer.
@@ -460,7 +485,7 @@ export class WorldSim {
     let end = this.alive === 0 || this.framesSinceGain > LEADER_PATIENCE;
     if (survive && this.frames >= SURVIVE_FRAMES) {
       end = true;
-      this.goalReached = this.alive > 0;
+      this.goalReached = this.cars.some((c) => !c.damaged && this.survived(c));
     }
     // A trip is over a little after its time limit: nothing more can be earned but distance.
     if (this.timeLimit !== null && this.frames >= this.timeLimit * 1.2) end = true;
