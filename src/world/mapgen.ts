@@ -59,6 +59,8 @@ export function recipeFor(map: number, _seed = 0): Recipe {
 
 type Edge = [number, number];
 
+const lerp2DPoint = (a: Point, b: Point, t: number): Point => ({ x: a.x + (b.x - a.x) * t, y: a.y + (b.y - a.y) * t });
+
 /** True when every intersection can reach every other along the streets, obeying one-way streets. */
 export function stronglyConnected(n: number, edges: Edge[], oneWay: boolean[]): boolean {
   if (n === 0) return true;
@@ -193,7 +195,7 @@ function tryGenerate(map: number, seed: number, calm = 1): World | null {
   world.time = r.time;
   world.fill = { buildings: theme.buildingDensity, trees: theme.treeDensity, heights: theme.heights, frontage: true };
   world.generateRoads();
-  placeMarkings(world, finalEdges, oneWay, rand, map);
+  placeMarkings(world, finalEdges, oneWay, rand, map, r.theme === "downtown" ? 0.75 : 0.3);
   world.generateItems();
   return world;
 }
@@ -202,7 +204,7 @@ function tryGenerate(map: number, seed: number, calm = 1): World | null {
  * Lights on the approaches to four-way intersections, stop signs on some approaches to
  * three-way ones, and the Start marking on a street near the middle of town.
  */
-function placeMarkings(world: World, edges: Edge[], oneWay: boolean[], rand: () => number, map: number): void {
+function placeMarkings(world: World, edges: Edge[], oneWay: boolean[], rand: () => number, map: number, crossingChance: number): void {
   // Traffic lights ramp in: a few junctions on the first new maps, more on later ones, so the
   // brains learn to stop for red without every junction being a wall from the start.
   const lightChance = Math.min(0.55, 0.15 + 0.1 * (map - 1));
@@ -233,4 +235,12 @@ function placeMarkings(world: World, edges: Edge[], oneWay: boolean[], rand: () 
     .filter(({ e, i }) => !oneWay[i] && distance(pts[e[0]], pts[e[1]]) > 300)
     .sort((a, b) => a.d - b.d);
   place("start", (candidates[0] ?? { i: 0 }).i, true, 0.35);
+  // Mid-block crosswalks: busy downtown has many, other towns a few, never on the start's street
+  // (cars would spawn into them). Pedestrians use them on pedestrian levels; elsewhere they're paint.
+  const startEdge = (candidates[0] ?? { i: 0 }).i;
+  edges.forEach(([a, b], i) => {
+    if (i === startEdge || distance(pts[a], pts[b]) < 320 || rand() >= crossingChance) return;
+    const s = new Segment(pts[a], pts[b]);
+    world.markings.push(createMarking("crossing", lerp2DPoint(pts[a], pts[b], 0.5), s.directionVector(), world.settings.roadWidth));
+  });
 }

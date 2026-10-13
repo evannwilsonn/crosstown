@@ -6,6 +6,11 @@ import { mulberry32 } from "../utils";
 import { add, distance, lerp2D, normalize, rightOf, scale, subtract, type Point } from "./geom";
 import { Light, Stop, type Marking } from "./markings";
 import { Navigator } from "./nav";
+import {
+  CROSSWALK_WAIT_FRAMES, HAZARD_NAMES, hazardTimeFactor, ICE_GRIP, onIce, pedestriansFor, RAIN_GRIP, roadCondition,
+  SNOW_GRIP, THEME_HAZARD, visibility, type Hazard, type IcePatch, type Pedestrian,
+} from "./hazards";
+import { townLook, type TimeOfDay } from "./worldThemes";
 import type { World } from "./world";
 
 export type WorldDriveMode = "off" | "AI" | "KEYS";
@@ -25,7 +30,7 @@ export type WorldDriveMode = "off" | "AI" | "KEYS";
  * come from each trip's own route (top speed plus an allowance for each turn, stop sign and
  * light), times the level's factor, which never drops below what is drivable.
  */
-export type WorldStage = "survive" | "easy" | "far" | "tight" | "detour" | "stack";
+export type WorldStage = "survive" | "easy" | "far" | "tight" | "detour" | "hazard" | "stack";
 
 export interface WorldLevel {
   number: number;
@@ -41,10 +46,16 @@ export interface WorldLevel {
   timeFactor: number;
   /** Streets closed on each trip after the first, on top of the earlier trips' closures. */
   closures: number;
+  /** The town's hazard, on its own level and then on the town's last level. */
+  hazards: Hazard[];
+  /** Dusk and night towns are dark on every level. */
+  light: TimeOfDay;
 }
 
-export const LEVELS_PER_MAP = 5;
-const TOWN_STAGES: WorldStage[] = ["easy", "far", "tight", "detour", "stack"];
+/** The sample town has five levels; every town after it has six, one for its hazard. */
+export const SAMPLE_LEVELS = 5;
+export const LEVELS_PER_MAP = 6;
+const TOWN_STAGES: WorldStage[] = ["easy", "far", "tight", "detour", "hazard", "stack"];
 const SAMPLE_STAGES: WorldStage[] = ["survive", "easy", "far", "tight", "stack"];
 
 /**
@@ -61,21 +72,27 @@ export const CUSTOM_LEVEL: WorldLevel = {
   minTrip: 0,
   timeFactor: 2,
   closures: 0,
+  hazards: [],
+  light: "day",
 };
 /** The tightest clock: 30% over the ideal time, plus the allowances, stays drivable. */
 const MIN_TIME_FACTOR = 1.3;
 
 /** The first level number in a town. */
 export function firstLevelOf(map: number): number {
-  return map * LEVELS_PER_MAP + 1;
+  return map === 0 ? 1 : SAMPLE_LEVELS + 1 + (map - 1) * LEVELS_PER_MAP;
 }
 
 export function worldLevelSpec(n: number): WorldLevel {
   const level = Math.max(1, Math.floor(n));
-  const map = Math.floor((level - 1) / LEVELS_PER_MAP);
-  const stage = (map === 0 ? SAMPLE_STAGES : TOWN_STAGES)[(level - 1) % LEVELS_PER_MAP];
+  const map = level <= SAMPLE_LEVELS ? 0 : 1 + Math.floor((level - SAMPLE_LEVELS - 1) / LEVELS_PER_MAP);
+  const stage = map === 0 ? SAMPLE_STAGES[level - 1] : TOWN_STAGES[(level - SAMPLE_LEVELS - 1) % LEVELS_PER_MAP];
+  const look = map === 0 ? null : townLook(map);
+  const light: TimeOfDay = look?.time ?? "day";
+  const hazard = look ? THEME_HAZARD[look.theme] : null;
+  const hazards = hazard && (stage === "hazard" || stage === "stack") ? [hazard] : [];
   if (stage === "survive") {
-    return { number: level, name: "Stay on the road for 45 s", map, stage, goal: "survive", minTrip: 0, timeFactor: 3, closures: 0 };
+    return { number: level, name: "Stay on the road for 45 s", map, stage, goal: "survive", minTrip: 0, timeFactor: 3, closures: 0, hazards, light };
   }
   // Each town's base is a notch harder than the last one's.
   const near = 500 + 80 * map;
@@ -84,7 +101,7 @@ export function worldLevelSpec(n: number): WorldLevel {
   const tight = Math.max(MIN_TIME_FACTOR, easy - 0.45);
   const closures = map === 0 ? 0 : Math.min(3, 1 + Math.floor((map - 1) / 3));
   const spec = (name: string, minTrip: number, timeFactor: number, detours: number): WorldLevel => ({
-    number: level, name, map, stage, goal: "every", minTrip, timeFactor, closures: detours,
+    number: level, name, map, stage, goal: "every", minTrip, timeFactor, closures: detours, hazards, light,
   });
   const roads = closures === 1 ? "a road closes" : `${closures} roads close`;
   switch (stage) {
@@ -92,6 +109,7 @@ export function worldLevelSpec(n: number): WorldLevel {
     case "far": return spec("Farther away", far, easy, 0);
     case "tight": return spec("Beat a tighter clock", near, tight, 0);
     case "detour": return spec(`Detours: ${roads} each trip`, near, easy, closures);
+    case "hazard": return spec(HAZARD_NAMES[hazard!], near, easy, 0);
     default: return spec(map === 0 ? "Far and fast" : "Everything at once", far, tight, closures);
   }
 }
@@ -136,8 +154,9 @@ export interface WorldSaved {
 }
 
 export const WORLD_RAYS = 7;
-/** Seven rays across 180 degrees, the car's speed, and the GPS direction. */
-export const WORLD_INPUTS = WORLD_RAYS + 2;
+/** Seven rays across 180 degrees, the car's speed, the GPS direction, and the road condition. */
+/** Plus the road condition: 0 dry, 0.5 wet, 1 icy. */
+export const WORLD_INPUTS = WORLD_RAYS + 3;
 const OUTPUTS = 4;
 const LEADER_PATIENCE = 600;
 /** Level 1 is passed by a car still driving at the time limit. */
@@ -153,6 +172,8 @@ const ARRIVE_RADIUS = 40;
 /** Cars may wait this long without progress, enough for a full red light. */
 const CAR_STALL_FRAMES = 600;
 const SENSOR_REACH = 220;
+/** Each ray's angle from straight ahead, matching the Sensor's fan (left first). */
+const rayAngles = Array.from({ length: WORLD_RAYS }, (_, i) => Math.PI / 2 - (i / (WORLD_RAYS - 1)) * Math.PI);
 /** Streets shorter than this are never closed: there'd be no room for the barricades. */
 const MIN_CLOSED_LENGTH = 240;
 /** A car that hasn't made progress for this long (1 s) isn't followed while others are moving. */
@@ -213,7 +234,11 @@ export class WorldSim {
   /** Streets closed on the trip under way, and the barricades across them. */
   closed: ReadonlySet<number> = new Set();
   barriers: Point[][] = [];
-  private plan: { world: World; level: number; targetSeed: number; target: Point | null; closed: Set<number>[] } | null = null;
+  private plan: { world: World; level: number; targetSeed: number; target: Point | null; closed: Set<number>[]; ice: IcePatch[] } | null = null;
+  /** People on the crosswalks, on pedestrian levels. */
+  pedestrians: Pedestrian[] = [];
+  /** Patches of black ice on this level's routes, on ice levels. */
+  ice: IcePatch[] = [];
   /** Called when a level starts on a different map, so the page can load it before cars spawn. */
   onMapChange?: (map: number) => void;
   private currentMap = 0;
@@ -310,10 +335,15 @@ export class WorldSim {
     if (this.custom) {
       this.destination = this.customDestination(this.origin.center);
       this.setClosed(new Set());
+      this.ice = [];
+      this.pedestrians = [];
       return;
     }
     const plan = this.levelPlan();
     this.destination = plan.target;
+    this.ice = plan.ice;
+    const w = this.world();
+    this.pedestrians = this.levelSpec.hazards.includes("pedestrians") ? pedestriansFor(w.markings, w.settings.roadWidth, this.targetSeed) : [];
     this.setClosed(plan.closed[Math.min(this.trip, plan.closed.length - 1)]);
   }
 
@@ -325,13 +355,14 @@ export class WorldSim {
    * target stays reachable. The same seed, town and level always give the same plan, so a
    * refresh keeps it.
    */
-  levelPlan(): { target: Point | null; closed: Set<number>[] } {
+  levelPlan(): { target: Point | null; closed: Set<number>[]; ice: IcePatch[] } {
     const w = this.world();
     const p = this.plan;
     if (p && p.world === w && p.level === this.level && p.targetSeed === this.targetSeed) return p;
     const spec = this.levelSpec;
     const rand = mulberry32((this.targetSeed ^ Math.imul(this.level, 0x9e3779b1)) >>> 0);
     const start = this.start!.center;
+    const facing = this.start!.direction;
     const from = new Navigator(w.graph, start);
     const startSeg = from.nearestSegment(start);
     let reach = 0;
@@ -353,13 +384,13 @@ export class WorldSim {
     const closuresFor = (target: Point): Set<number>[] => {
       const destSeg = new Navigator(w.graph, target).nearestSegment(target);
       // A detour should cost a few blocks, not send the car across town.
-      const direct = new Navigator(w.graph, target).remaining(start);
+      const direct = new Navigator(w.graph, target).remaining(start, facing);
       const cap = Math.max(direct * 1.6, direct + 900);
       const closed: Set<number>[] = [new Set()];
       let current = new Set<number>();
       for (let trip = 1; trip < TRIPS_PER_GENERATION; trip++) {
         for (let k = 0; k < spec.closures; k++) {
-          const route = new Navigator(w.graph, target, current).routeSegments(start);
+          const route = new Navigator(w.graph, target, current).routeSegments(start, facing);
           const options = route.filter((si) => {
             const seg = w.graph.segments[si];
             return si !== startSeg && si !== destSeg && !current.has(si) && distance(seg.p1, seg.p2) >= MIN_CLOSED_LENGTH;
@@ -373,7 +404,7 @@ export class WorldSim {
           let chosen: Set<number> | null = null;
           for (const si of options) {
             const trial = new Set(current).add(si);
-            const d = new Navigator(w.graph, target, trial).remaining(start);
+            const d = new Navigator(w.graph, target, trial).remaining(start, facing);
             if (d === Infinity) continue;
             if (d <= cap) {
               chosen = trial;
@@ -404,7 +435,27 @@ export class WorldSim {
         if (full) break;
       }
     }
-    this.plan = { world: w, level: this.level, targetSeed: this.targetSeed, target, closed };
+    // Black ice lies on the streets the trips will drive, so every trip meets some.
+    const ice: IcePatch[] = [];
+    if (target && spec.hazards.includes("ice")) {
+      const iced = new Set<number>();
+      for (const c of closed) {
+        const route = new Navigator(w.graph, target, c).routeSegments(start, facing).filter((si) => {
+          const seg = w.graph.segments[si];
+          return !iced.has(si) && distance(seg.p1, seg.p2) >= 180;
+        });
+        for (let k = 0; k < 2 && route.length; k++) {
+          const si = route.splice(Math.floor(rand() * route.length), 1)[0];
+          iced.add(si);
+          const seg = w.graph.segments[si];
+          const len = distance(seg.p1, seg.p2);
+          const mid = 0.35 + rand() * 0.3;
+          const half = 60 / len;
+          ice.push({ a: lerp2D(seg.p1, seg.p2, mid - half), b: lerp2D(seg.p1, seg.p2, mid + half), halfWidth: w.settings.roadWidth / 2 });
+        }
+      }
+    }
+    this.plan = { world: w, level: this.level, targetSeed: this.targetSeed, target, closed, ice };
     return this.plan;
   }
 
@@ -448,7 +499,7 @@ export class WorldSim {
    */
   private timeLimitFor(nav: Navigator, from: Point): number {
     const w = this.world();
-    const path = nav.path(from);
+    const path = nav.path(from, this.origin?.direction);
     let length = 0;
     let turns = 0;
     for (let i = 1; i < path.length; i++) {
@@ -462,8 +513,10 @@ export class WorldSim {
     const onRoute = (m: Marking) => path.some((p, i) => i > 0 && distanceToSegment(m.center, path[i - 1], p) < 35);
     const stops = w.markings.filter((m) => m instanceof Stop && onRoute(m)).length;
     const lights = w.markings.filter((m) => m instanceof Light && onRoute(m)).length;
-    const ideal = length / 3 + turns * TURN_FRAMES + stops * STOP_FRAMES + lights * LIGHT_FRAMES + START_FRAMES;
-    return Math.round(ideal * this.levelSpec.timeFactor);
+    const spec = this.levelSpec;
+    const crossings = spec.hazards.includes("pedestrians") ? w.markings.filter((m) => m.type === "crossing" && onRoute(m)).length : 0;
+    const ideal = length / 3 + turns * TURN_FRAMES + stops * STOP_FRAMES + lights * LIGHT_FRAMES + crossings * CROSSWALK_WAIT_FRAMES + START_FRAMES;
+    return Math.round(ideal * spec.timeFactor * hazardTimeFactor(spec.hazards, spec.light));
   }
 
   private spawn(): void {
@@ -472,7 +525,7 @@ export class WorldSim {
     this.chooseTrip();
     const start = this.origin!;
     this.nav = this.destination ? new Navigator(w.graph, this.destination, this.closed) : null;
-    this.startRemaining = this.nav ? this.nav.remaining(start.center) : 0;
+    this.startRemaining = this.nav ? this.nav.remaining(start.center, start.direction) : 0;
     this.timeLimit = this.nav && this.levelSpec.goal !== "survive" ? this.timeLimitFor(this.nav, start.center) : null;
     const heading = Math.atan2(-start.direction.x, -start.direction.y);
     const make = (type: "AI" | "KEYS", brain?: Genome) => {
@@ -571,17 +624,25 @@ export class WorldSim {
     world.updateLights(this.clock / 60);
     const obstacles = this.barriers.length ? world.obstacles().concat(this.barriers) : world.obstacles();
     const nav = this.nav;
+    const spec = this.levelSpec;
+    for (const p of this.pedestrians) p.update(this.clock);
+    const condition = roadCondition(spec.hazards);
+    const wet = spec.hazards.includes("rain");
+    const icy = spec.hazards.includes("ice");
 
     this.cars.forEach((car, i) => {
       const t = this.trips.get(car)!;
       if (t.arrivedAt !== undefined) return;
       if (car.damaged && car.type === "AI") return;
-      car.update(obstacles.filter((o) => near(o, car)), [], [car.speed / car.maxSpeed, this.gps(car, t)]);
+      if (car.sensor) car.sensor.visibility = visibility(car, rayAngles, spec.hazards, spec.light, world.graph.points);
+      car.grip = wet ? RAIN_GRIP : icy ? (this.ice.length && onIce(car, this.ice) ? ICE_GRIP : SNOW_GRIP) : 1;
+      const people = this.pedestrians.length ? this.pedestrians.filter((p) => Math.abs(p.x - car.x) < SENSOR_REACH && Math.abs(p.y - car.y) < SENSOR_REACH) : [];
+      car.update(obstacles.filter((o) => near(o, car)), people, [car.speed / car.maxSpeed, this.gps(car, t), condition]);
       if (this.origin) t.far = Math.max(t.far, distance(car, this.origin.center));
       if (!nav) return;
       // Finding the nearest road is the costly part; each car does it every fourth frame.
       if ((this.frames + i) % 4 === 0 || t.segment < 0) t.segment = nav.nearestSegment(car);
-      const g = nav.guide(car, t.segment);
+      const g = nav.guide(car, t.segment, { x: -Math.sin(car.angle), y: -Math.cos(car.angle) });
       t.remaining = g.remaining;
       t.waypoint = g.waypoint;
       if (g.remaining < t.best) t.best = g.remaining;

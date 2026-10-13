@@ -3,6 +3,7 @@ import { hash2 } from "./items";
 import type { Point } from "./geom";
 import type { World } from "./world";
 import type { WorldTheme } from "./worldThemes";
+import type { Hazard, IcePatch } from "./hazards";
 
 /**
  * What a town paints around its roads: textures on the ground, the sea, street lamps after dark,
@@ -231,4 +232,92 @@ export function drawClosures(
     ctx.restore();
   }
   ctx.restore();
+}
+
+/** Black ice: glassy pale patches across the road, with a few glints. */
+export function drawIce(ctx: CanvasRenderingContext2D, patches: readonly IcePatch[]): void {
+  ctx.save();
+  for (const { a, b, halfWidth } of patches) {
+    ctx.strokeStyle = "rgba(190,225,255,0.55)";
+    ctx.lineWidth = halfWidth * 2 - 8;
+    ctx.lineCap = "round";
+    ctx.beginPath();
+    ctx.moveTo(a.x, a.y);
+    ctx.lineTo(b.x, b.y);
+    ctx.stroke();
+    ctx.strokeStyle = "rgba(255,255,255,0.7)";
+    ctx.lineWidth = 2;
+    for (let k = 0; k < 4; k++) {
+      const t = 0.15 + k * 0.23;
+      const x = a.x + (b.x - a.x) * t + (k % 2 ? 14 : -18);
+      const y = a.y + (b.y - a.y) * t + (k % 2 ? -10 : 12);
+      ctx.beginPath();
+      ctx.moveTo(x - 8, y - 4);
+      ctx.lineTo(x + 8, y + 4);
+      ctx.stroke();
+    }
+  }
+  ctx.restore();
+}
+
+/**
+ * Weather over everything: fog and sandstorms close in around the followed car (they're how far
+ * the sensors can see), rain streaks down, and snow drifts on icy levels.
+ */
+export function drawWeather(
+  ctx: CanvasRenderingContext2D,
+  hazards: readonly Hazard[],
+  view: View,
+  focus: Point,
+  clock: number,
+): void {
+  const left = view.center.x - view.radius;
+  const top = view.center.y - view.radius;
+  const size = view.radius * 2;
+  const haze = hazards.includes("fog") ? "200,206,212" : hazards.includes("sandstorm") ? "214,178,120" : null;
+  if (haze) {
+    const fog = ctx.createRadialGradient(focus.x, focus.y, 50, focus.x, focus.y, 330);
+    fog.addColorStop(0, `rgba(${haze},0.05)`);
+    fog.addColorStop(0.45, `rgba(${haze},0.5)`);
+    fog.addColorStop(1, `rgba(${haze},0.78)`);
+    ctx.fillStyle = fog;
+    ctx.fillRect(left, top, size, size);
+  }
+  const drift = (count: number, speedX: number, speedY: number, draw: (x: number, y: number, i: number) => void) => {
+    for (let i = 0; i < count; i++) {
+      const h1 = hash2(i, 7, 91);
+      const h2 = hash2(i, 13, 92);
+      const x = left + ((h1 * size + clock * speedX * (0.7 + h2 * 0.6)) % size + size) % size;
+      const y = top + ((h2 * size + clock * speedY * (0.7 + h1 * 0.6)) % size + size) % size;
+      draw(x, y, i);
+    }
+  };
+  if (hazards.includes("rain")) {
+    ctx.strokeStyle = "rgba(205,220,240,0.6)";
+    ctx.lineWidth = 2;
+    ctx.beginPath();
+    drift(Math.min(500, Math.round(size / 6)), 3, 14, (x, y) => {
+      ctx.moveTo(x, y);
+      ctx.lineTo(x - 4, y - 22);
+    });
+    ctx.stroke();
+  }
+  if (hazards.includes("sandstorm")) {
+    ctx.strokeStyle = "rgba(235,205,150,0.5)";
+    ctx.lineWidth = 2;
+    ctx.beginPath();
+    drift(Math.min(400, Math.round(size / 8)), 9, 1.5, (x, y) => {
+      ctx.moveTo(x, y);
+      ctx.lineTo(x - 26, y - 3);
+    });
+    ctx.stroke();
+  }
+  if (hazards.includes("ice")) {
+    ctx.fillStyle = "rgba(255,255,255,0.85)";
+    drift(Math.min(400, Math.round(size / 8)), 0.8, 2.2, (x, y, i) => {
+      ctx.beginPath();
+      ctx.arc(x, y, 2 + (i % 3), 0, Math.PI * 2);
+      ctx.fill();
+    });
+  }
 }

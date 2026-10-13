@@ -176,7 +176,10 @@ describe("world levels and navigation", () => {
     const nav = new Navigator(new Graph([a, b, c], [new Segment(a, b), new Segment(b, c)]), { x: 400, y: 300 });
     const from = { x: 100, y: 0 };
     expect(nav.remaining(from)).toBeCloseTo(300 + 300, 0); // along the road, not the 361 px straight line
-    expect(nav.guide(from, nav.nearestSegment(from)).waypoint).toEqual(b); // head for the corner first
+    // The GPS points 150 px ahead along the route: straight on, then round the corner as it nears.
+    expect(nav.guide(from, nav.nearestSegment(from)).waypoint).toEqual({ x: 250, y: 0 });
+    const nearCorner = { x: 350, y: 0 };
+    expect(nav.guide(nearCorner, nav.nearestSegment(nearCorner)).waypoint).toEqual({ x: 400, y: 100 });
   });
 
   it("starts at level 1 with minimal brains and moves up when a car survives the time limit", async () => {
@@ -331,26 +334,69 @@ describe("training on the visitor's own map", () => {
 
 describe("timed world levels", () => {
   it("never run out, add one challenge per level, then stack them before the town changes", async () => {
-    const { worldLevelSpec, LEVELS_PER_MAP } = await import("../src/world/sim");
-    expect(LEVELS_PER_MAP).toBe(5);
+    const { worldLevelSpec, firstLevelOf } = await import("../src/world/sim");
     expect([1, 2, 3, 4, 5].map((n) => worldLevelSpec(n).stage)).toEqual(["survive", "easy", "far", "tight", "stack"]);
-    expect([6, 7, 8, 9, 10].map((n) => worldLevelSpec(n).stage)).toEqual(["easy", "far", "tight", "detour", "stack"]);
+    expect([6, 7, 8, 9, 10, 11].map((n) => worldLevelSpec(n).stage)).toEqual(["easy", "far", "tight", "detour", "hazard", "stack"]);
+    expect([firstLevelOf(0), firstLevelOf(1), firstLevelOf(2)]).toEqual([1, 6, 12]);
     for (let n = 1; n < 200; n++) {
       const s = worldLevelSpec(n);
-      expect(s.map).toBe(Math.floor((n - 1) / 5));
+      expect(firstLevelOf(s.map)).toBeLessThanOrEqual(n);
+      expect(firstLevelOf(s.map + 1)).toBeGreaterThan(n);
       expect(s.timeFactor).toBeGreaterThanOrEqual(1.3);
       if (n === 1) continue;
-      const easy = worldLevelSpec(s.map * 5 + (s.map === 0 ? 2 : 1));
+      const easy = worldLevelSpec(firstLevelOf(s.map) + (s.map === 0 ? 1 : 0));
       // Each challenge level changes exactly one thing from the town's easy level.
-      if (s.stage === "far") expect([s.minTrip > easy.minTrip, s.timeFactor === easy.timeFactor, s.closures === 0]).toEqual([true, true, true]);
-      if (s.stage === "tight") expect([s.minTrip === easy.minTrip, s.timeFactor < easy.timeFactor, s.closures === 0]).toEqual([true, true, true]);
-      if (s.stage === "detour") expect([s.minTrip === easy.minTrip, s.timeFactor === easy.timeFactor, s.closures > 0]).toEqual([true, true, true]);
-      if (s.stage === "stack") expect([s.minTrip > easy.minTrip, s.timeFactor < easy.timeFactor]).toEqual([true, true]);
+      const same = (a: boolean, b: boolean, c: boolean, d: boolean) => [a, b, c, d];
+      if (s.stage === "far") expect(same(s.minTrip > easy.minTrip, s.timeFactor === easy.timeFactor, s.closures === 0, s.hazards.length === 0)).toEqual([true, true, true, true]);
+      if (s.stage === "tight") expect(same(s.minTrip === easy.minTrip, s.timeFactor < easy.timeFactor, s.closures === 0, s.hazards.length === 0)).toEqual([true, true, true, true]);
+      if (s.stage === "detour") expect(same(s.minTrip === easy.minTrip, s.timeFactor === easy.timeFactor, s.closures > 0, s.hazards.length === 0)).toEqual([true, true, true, true]);
+      if (s.stage === "hazard") expect(same(s.minTrip === easy.minTrip, s.timeFactor === easy.timeFactor, s.closures === 0, s.hazards.length === 1)).toEqual([true, true, true, true]);
+      if (s.stage === "stack") expect([s.minTrip > easy.minTrip, s.timeFactor < easy.timeFactor, s.map === 0 || s.hazards.length === 1]).toEqual([true, true, true]);
+      // Dusk and night towns are dark on every level.
+      expect(s.light).toBe(worldLevelSpec(firstLevelOf(s.map)).light);
     }
-    // No detours in the sample town; they start in the second town.
-    expect([1, 2, 3, 4, 5].every((n) => worldLevelSpec(n).closures === 0)).toBe(true);
+    // No detours or hazards in the sample town; they start in the second town.
+    expect([1, 2, 3, 4, 5].every((n) => worldLevelSpec(n).closures === 0 && worldLevelSpec(n).hazards.length === 0)).toBe(true);
     expect(worldLevelSpec(9).closures).toBe(1);
+    expect(worldLevelSpec(10).hazards).toEqual(["pedestrians"]);
     expect(worldLevelSpec(60).minTrip).toBeGreaterThan(worldLevelSpec(7).minTrip);
+  });
+
+  it("hazards: pedestrians are obstacles, fog and night shorten the sensors, rain and ice cut grip", async () => {
+    const { visibility, Pedestrian, onIce } = await import("../src/world/hazards");
+    const { Car } = await import("../src/car");
+    const car = new Car(0, 0, 30, 50, "AI");
+    const angles = [Math.PI / 2, 0, -Math.PI / 2];
+    expect(visibility(car, angles, [], "day", [])).toBeNull();
+    expect(visibility(car, angles, ["fog"], "day", [])!.every((v) => v < 0.5)).toBe(true);
+    const night = visibility(car, angles, [], "night", [{ x: 5000, y: 5000 }])!;
+    expect(night[1]).toBe(1); // straight ahead: headlights
+    expect(night[0]).toBeLessThan(0.5);
+    expect(visibility(car, angles, [], "night", [{ x: 10, y: 10 }])!.every((v) => v === 1)).toBe(true); // under a lamp
+    const crossing = createMarking("crossing", { x: 0, y: 0 }, { x: 0, y: -1 }, 100);
+    const p = new Pedestrian(crossing, 100, 1, 1);
+    const seen = new Set<string>();
+    for (let t = 0; t < 2000; t += 50) {
+      p.update(t);
+      seen.add(`${Math.round(p.x)},${Math.round(p.y)}`);
+    }
+    expect(seen.size).toBeGreaterThan(5); // they walk back and forth
+    expect(onIce({ x: 0, y: 0 }, [{ a: { x: -50, y: 0 }, b: { x: 50, y: 0 }, halfWidth: 50 }])).toBe(true);
+    // Low grip: the same steering input turns the path less.
+    const path = (grip: number) => {
+      const c = new Car(0, 0, 30, 50, "AI");
+      c.brain = undefined;
+      c.grip = grip;
+      c.speed = 3;
+      for (let i = 0; i < 40; i++) {
+        c.controls.forward = true;
+        c.controls.left = true;
+        c.update([], []);
+      }
+      c.dispose();
+      return c.x;
+    };
+    expect(Math.abs(path(0.15))).toBeLessThan(Math.abs(path(1)));
   });
 
   it("detour levels close a street on each later trip's route, keep earlier closures, and stay reachable", async () => {
@@ -362,15 +408,17 @@ describe("timed world levels", () => {
       sim.level = 9;
       expect(sim.levelSpec.stage).toBe("detour");
       const plan = sim.levelPlan();
-      const start = w.markings.find((m) => m.type === "start")!.center;
+      const startMark = w.markings.find((m) => m.type === "start")!;
+      const start = startMark.center;
+      const facing = startMark.direction;
       expect(plan.closed[0].size).toBe(0);
       for (let t = 1; t < plan.closed.length; t++) {
         expect(plan.closed[t].size).toBeGreaterThan(plan.closed[t - 1].size);
         for (const si of plan.closed[t - 1]) expect(plan.closed[t].has(si)).toBe(true);
-        const before = new Navigator(w.graph, plan.target!, plan.closed[t - 1]).routeSegments(start);
+        const before = new Navigator(w.graph, plan.target!, plan.closed[t - 1]).routeSegments(start, facing);
         // Something on the previous trip's route is now closed: the route has to change.
         expect(before.some((si) => plan.closed[t].has(si))).toBe(true);
-        expect(new Navigator(w.graph, plan.target!, plan.closed[t]).remaining(start)).toBeLessThan(Infinity);
+        expect(new Navigator(w.graph, plan.target!, plan.closed[t]).remaining(start, facing)).toBeLessThan(Infinity);
       }
       // Barricades are walls the sensors see.
       sim.population = 2;
@@ -395,6 +443,19 @@ describe("timed world levels", () => {
 });
 
 describe("generated level maps", () => {
+  it("the GPS never asks for a U-turn mid-street: routes leave ahead of the car", async () => {
+    const { Navigator } = await import("../src/world/nav");
+    // A straight street a-b-c; the car is between a and b facing c, the target is behind it at a's side.
+    const a = { x: 0, y: 0 }, b = { x: 400, y: 0 }, c = { x: 800, y: 0 }, d = { x: 800, y: 400 }, e = { x: 0, y: 400 };
+    const g = new Graph([a, b, c, d, e], [new Segment(a, b), new Segment(b, c), new Segment(c, d), new Segment(d, e), new Segment(e, a)]);
+    const nav = new Navigator(g, { x: 0, y: 200 });
+    const car = { x: 300, y: 0 };
+    const facingEast = { x: 1, y: 0 };
+    // Without a heading it would turn straight back; facing east it carries on and goes round.
+    expect(nav.path(car).map((p) => p.x)).toContain(0);
+    expect(nav.path(car, facingEast)[1]).toEqual(b);
+  });
+
   it("never look alike two towns in a row, and the first five are all different", async () => {
     const { townLook } = await import("../src/world/worldThemes");
     const looks = Array.from({ length: 40 }, (_, i) => townLook(i + 1));

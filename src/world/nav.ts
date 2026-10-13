@@ -1,4 +1,6 @@
 import { distance, type Point } from "./geom";
+
+const lerpPoint = (a: Point, b: Point, t: number): Point => ({ x: a.x + (b.x - a.x) * t, y: a.y + (b.y - a.y) * t });
 import type { Graph } from "./graph";
 
 /**
@@ -78,44 +80,64 @@ export class Navigator {
   }
 
   /**
-   * Road distance left to the destination and the point to head for next, from `p` on the
-   * segment `segment` (pass the result of nearestSegment, cached by the caller).
+   * Which end of the car's street the route leaves by, and the road distance from there. With a
+   * `heading`, only an end ahead of the car counts: these cars can't turn round in a two-lane
+   * street, so like a real GPS the route carries on to the next junction and turns there.
+   * (Routing straight back the way the car faced sent most trips into an impossible U-turn,
+   * and the brains learned to ignore the GPS.) Returns first = -1 when the destination is
+   * straight ahead on this street.
    */
-  guide(p: Point, segment: number): { remaining: number; waypoint: Point } {
+  private leave(p: Point, segment: number, heading?: Point): { first: number; remaining: number } {
     const s = this.graph.segments[segment];
-    if (!s) return { remaining: Infinity, waypoint: this.destination };
-    if (segment === this.destSegment) return { remaining: distance(p, this.destination), waypoint: this.destination };
-    let best = { remaining: Infinity, waypoint: this.destination };
-    for (const end of s.oneWay ? [s.p2] : [s.p1, s.p2]) {
+    if (!s) return { first: -2, remaining: Infinity };
+    const ahead = (q: Point) => !heading || (q.x - p.x) * heading.x + (q.y - p.y) * heading.y > 0;
+    if (segment === this.destSegment && ahead(this.destination)) return { first: -1, remaining: distance(p, this.destination) };
+    const ends = s.oneWay ? [s.p2] : [s.p1, s.p2];
+    const forward = ends.filter(ahead);
+    let first = -2;
+    let remaining = Infinity;
+    for (const end of forward.length ? forward : ends) {
       const i = this.index.get(`${end.x},${end.y}`);
       if (i === undefined || this.dist[i] === Infinity) continue;
-      const remaining = distance(p, end) + this.dist[i];
-      if (remaining < best.remaining) {
-        // Close to the junction: point at the road after it, the way a GPS calls the next turn early.
-        const after = this.next[i] === -1 ? this.destination : this.graph.points[this.next[i]];
-        best = { remaining, waypoint: distance(p, end) < 40 && after ? after : end };
-      }
-    }
-    return best;
-  }
-
-  /** The road route from `p` to the destination, as the points to drive through. */
-  path(p: Point): Point[] {
-    const seg = this.nearestSegment(p);
-    const s = this.graph.segments[seg];
-    if (!s) return [p, this.destination];
-    if (seg === this.destSegment) return [p, this.destination];
-    let first = -1;
-    let best = Infinity;
-    for (const end of s.oneWay ? [s.p2] : [s.p1, s.p2]) {
-      const i = this.index.get(`${end.x},${end.y}`);
-      if (i === undefined || this.dist[i] === Infinity) continue;
-      const d = distance(p, end) + this.dist[i];
-      if (d < best) {
-        best = d;
+      const r = distance(p, end) + this.dist[i];
+      if (r < remaining) {
+        remaining = r;
         first = i;
       }
     }
+    // Nothing reachable ahead: fall back to any end (a dead end the car must turn round in).
+    if (first === -2 && forward.length && heading) return this.leave(p, segment);
+    return { first, remaining };
+  }
+
+  /**
+   * Road distance left to the destination and the point to head for: a spot `lookahead` px
+   * further along the route, the way a phone's GPS calls a turn as you approach it. (Pointing at
+   * the next junction instead kept the arrow nearly still until the car was in the junction,
+   * then flipped it, which is hard for a brain to learn to follow.) Pass the result of
+   * nearestSegment for `segment`, cached by the caller, and the car's heading.
+   */
+  guide(p: Point, segment: number, heading?: Point, lookahead = 150): { remaining: number; waypoint: Point } {
+    const { first, remaining } = this.leave(p, segment, heading);
+    if (first === -2) return { remaining: Infinity, waypoint: this.destination };
+    // Walk the route from the car until `lookahead` px have been covered.
+    let from = p;
+    let left = lookahead;
+    for (let i = first, guard = 0; guard <= this.graph.points.length; guard++) {
+      const to = i === -1 ? this.destination : this.graph.points[i];
+      const d = distance(from, to);
+      if (d >= left || i === -1) return { remaining, waypoint: d > 0 && d >= left ? lerpPoint(from, to, left / d) : to };
+      left -= d;
+      from = to;
+      i = this.next[i];
+      if (i === -2) break;
+    }
+    return { remaining, waypoint: this.destination };
+  }
+
+  /** The road route from `p` (facing `heading`, if given) to the destination, as the points to drive through. */
+  path(p: Point, heading?: Point): Point[] {
+    const { first } = this.leave(p, this.nearestSegment(p), heading);
     const out = [p];
     for (let i = first, guard = 0; i >= 0 && guard < this.graph.points.length; i = this.next[i], guard++) {
       out.push(this.graph.points[i]);
@@ -128,8 +150,8 @@ export class Navigator {
    * The whole streets (graph segments) the route from `p` drives along, in order. The partial
    * streets at either end, where the car starts and where the destination is, are left out.
    */
-  routeSegments(p: Point): number[] {
-    const pts = this.path(p).slice(1, -1);
+  routeSegments(p: Point, heading?: Point): number[] {
+    const pts = this.path(p, heading).slice(1, -1);
     const bySpan = new Map<string, number>();
     this.graph.segments.forEach((s, i) => {
       bySpan.set(`${s.p1.x},${s.p1.y}|${s.p2.x},${s.p2.y}`, i);
@@ -143,9 +165,9 @@ export class Navigator {
     return out;
   }
 
-  /** Road distance from `p` to the destination. */
-  remaining(p: Point): number {
-    return this.guide(p, this.nearestSegment(p)).remaining;
+  /** Road distance from `p` (facing `heading`, if given) to the destination. */
+  remaining(p: Point, heading?: Point): number {
+    return this.leave(p, this.nearestSegment(p), heading).remaining;
   }
 
   /** Road distance from a graph point to the destination (Infinity if unreachable). */

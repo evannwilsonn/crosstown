@@ -1,9 +1,15 @@
 import { getIntersection, lerp, type Point, type Touch } from "./utils";
-import type { Car } from "./car";
+import type { Car, Obstacle } from "./car";
 
 export class Sensor {
   rays: [Point, Point][] = [];
   readings: (Touch | null)[] = [];
+  /**
+   * How much of each ray can see, as a share of its length (1 = all of it). Darkness and fog
+   * shorten rays; anything beyond goes unseen. Readings keep the full-length scale, so a close
+   * obstacle means the same to the brain whatever the weather.
+   */
+  visibility: number[] | null = null;
 
   constructor(
     private car: Car,
@@ -12,9 +18,13 @@ export class Sensor {
     public raySpread = Math.PI / 2,
   ) {}
 
-  update(borders: Point[][], traffic: Car[]): void {
+  update(borders: Point[][], traffic: Obstacle[]): void {
     this.castRays();
-    this.readings = this.rays.map((ray) => this.getReading(ray, borders, traffic));
+    this.readings = this.rays.map((ray, i) => {
+      const r = this.getReading(ray, borders, traffic);
+      const seen = this.visibility?.[i] ?? 1;
+      return r && r.offset > seen ? null : r;
+    });
   }
 
   /** Inputs for the network: 0 when nothing is seen, rising toward 1 as an obstacle gets closer. */
@@ -22,7 +32,7 @@ export class Sensor {
     return this.readings.map((r) => (r ? 1 - r.offset : 0));
   }
 
-  private getReading(ray: [Point, Point], borders: Point[][], traffic: Car[]): Touch | null {
+  private getReading(ray: [Point, Point], borders: Point[][], traffic: Obstacle[]): Touch | null {
     let nearest: Touch | null = null;
     const consider = (t: Touch | null) => {
       if (t && (!nearest || t.offset < nearest.offset)) nearest = t;

@@ -25,7 +25,7 @@ Use the arrow keys or W A S D to drive in "Drive it yourself" mode.
 | Step | In this project |
 | --- | --- |
 | Problem | Drive with no labelled data, and keep improving as the challenge grows. |
-| Inputs | Seven ray sensors across 180 degrees (0 when a ray sees nothing, rising to 1 as an obstacle gets close) plus the car's speed. In the world, a GPS input is added as well. |
+| Inputs | Seven ray sensors across 180 degrees (0 when a ray sees nothing, rising to 1 as an obstacle gets close) plus the car's speed. In the world, a GPS input and a road-condition input are added as well. |
 | Starting point | Generation 1 is random minimal networks: inputs wired straight to 4 controls (forward, left, right, reverse), no hidden neurons. |
 | Model | A NEAT genome (`src/neat.ts`, after Stanley & Miikkulainen 2002): any acyclic network of step neurons, with as many hidden neurons as evolution has added. |
 | Breeding | Brains are grouped into species by structure and compete mostly within their species, so a new neuron gets time to prove itself. Parents cross over gene by gene using innovation numbers. Mutations nudge weights and sometimes add a connection or split one with a new neuron. The best brain rides unchanged into the next generation, so progress never goes backwards. |
@@ -60,15 +60,35 @@ Use the arrow keys or W A S D to drive in "Drive it yourself" mode.
 
 The world builds a town around a road network: road borders, buildings and trees in pseudo 3D, road markings with working traffic lights, OpenStreetMap import and a minimap.
 
-**Inputs:** the seven rays and speed, plus GPS. The GPS input is the angle to the next turn on the shortest legal road route to the destination (`world/nav.ts`: Dijkstra over the road graph, respecting one-way streets). Navigation never steers. The brain has to learn to follow the arrow and stay on the road at the same time.
+**Inputs:** the seven rays and speed, plus GPS and the road condition.
 
-**Levels never run out, and they add one challenge at a time.** Every town has five levels: an easy one to learn the new streets, then one level per challenge on its own, then a level that stacks them all. Then the town changes, and the next town's base is a notch harder (`worldLevelSpec` in `world/sim.ts`).
+- **GPS** is the angle to a point about 15 m ahead along the shortest legal route to the destination (`world/nav.ts`: Dijkstra over the road graph, respecting one-way streets and closed roads). It calls a turn as the car approaches it, like a phone's GPS. It never asks for a U-turn in the middle of a street; it routes on to the next junction instead.
+  - An earlier version pointed at the next junction, so the arrow barely moved until the car was in the junction and then flipped.
+  - It also routed straight back the way the car faced, which more than half of all trips needed. These cars can't turn round in a two-lane street, so the brains learned to ignore the GPS and loop the block.
+- **Road condition** reads 0 on a dry road, 0.5 in rain and 1 on ice, the way a driver sees rain on the windshield. It says the road is slippery; evolution has to work out what to do about it. This is a sensor, not knowledge: brains start random either way.
+
+Navigation never steers. The brain has to learn to follow the arrow and stay on the road at the same time.
+
+**Levels never run out, and they add one challenge at a time.** Every town has six levels: an easy one to learn the new streets, then one level per challenge on its own (a farther target, a tighter clock, road closures, the town's hazard), then a level that stacks them all. The sample town has five, without closures or a hazard. Then the town changes, and the next town's base is a notch harder (`worldLevelSpec` in `world/sim.ts`).
 
 | Levels | Town | What each level asks |
 | --- | --- | --- |
 | 1-5 | Sample town | 1. Stay on the road for 45 s · 2. A close target, relaxed clock · 3. Farther away · 4. Tighter clock · 5. Far and fast |
-| 6-10 | Downtown | 6. New streets, close target · 7. Farther · 8. Tighter clock · 9. Detours · 10. Everything at once |
-| 11+ | A new town every five levels | The same five steps, each town a notch harder: longer trips, tighter clocks (never below 1.3× the ideal time), and more road closures per trip (1, then 2, then 3) |
+| 6-11 | Downtown | 6. New streets, close target · 7. Farther · 8. Tighter clock · 9. Detours · 10. Pedestrians · 11. Everything at once |
+| 12+ | A new town every six levels | The same six steps with the town's own hazard, each town a notch harder: longer trips, tighter clocks (never below 1.3× the ideal time), and more road closures per trip (1, then 2, then 3) |
+
+**Hazards** change how the cars drive, not just how the town looks (`world/hazards.ts`). Each town introduces its own on a level by itself, then folds it into its last level. Every hazard also adds fair time to the clock: per crosswalk on the route for pedestrians, or a share of the time for weather and darkness.
+
+| Town | Hazard | What it does to the cars |
+| --- | --- | --- |
+| Downtown | Pedestrians | People wait at the curb and walk the crosswalks on the simulation's clock. The sensors see them, and hitting one is a crash |
+| Desert | Sandstorm | Every sensor sees less than half as far |
+| Snowy | Black ice | Snow cuts grip everywhere, and patches of ice on the trips' routes give almost none. Cars slide wide and take longer to stop |
+| Coastal | Sea fog | Every sensor sees less than half as far |
+| Autumn | Rain | Wet roads cut grip, so fast turns slide |
+| Dusk and night towns | Darkness, on every level | Past the headlights the side sensors see less (much less at night), except under the street lamp at every junction |
+
+Grip is modelled simply: with less grip the car's direction of travel lags its heading, so it slides through turns, and it accelerates and brakes less.
 
 1. **Staying on the road (level 1)** is the course's challenge. Fitness is distance driven. It's cleared when a car is still driving at 45 s and has covered at least 300 m away from the start, so circling in place doesn't count.
 2. **Every other level is three timed trips** from the town's Start marking to the same target, the red pin. A level picks its target at random once and keeps it until the level is cleared, so every generation faces the same test. A level is cleared when one brain arrives in time on all three trips. Reset learning picks new targets; a refresh keeps them.
@@ -89,7 +109,7 @@ The camera and the highlighted car follow the best car that is still moving. A c
 | Snowy town | Adds one-way streets | Brick and timber houses with snowy roofs and lit windows, snow-tipped pines |
 | Coastal town | Bigger | White houses with blue roofs, a beach and the sea |
 | Autumn suburb | Bigger still, up to 8 by 8 blocks | Brick and clapboard houses, orange, red and gold trees, fallen leaves |
-| Towns 6-10 | Keep growing | The same five at dusk: warm light, lamps coming on, headlights |
+| Towns 6-10 | Keep growing | The same five at dusk: warm light, lamps coming on, headlights. Darkness is the new challenge |
 | Towns 11-15 | Keep growing | The same five at night: lit windows, street lamps at every junction, headlights |
 
 After that the cycle repeats, and two towns in a row never look alike. Buildings line both sides of every street. The course's method only follows the town's outline, which leaves the inside of big blocks empty.
