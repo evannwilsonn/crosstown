@@ -14,8 +14,14 @@ export class Car {
   sensor?: Sensor;
   brain?: NeuralNetwork;
 
-  /** Furthest forward distance reached, used as fitness. */
+  /** Best fitness reached: forward distance on the highway, distance from spawn in an open world. */
   progress = 0;
+  /**
+   * "forward" scores how far up the highway a car got (course phase 1).
+   * "odometer" adds up distance driven, as the course does in the virtual world.
+   */
+  fitness: "forward" | "odometer" = "forward";
+  private odometer = 0;
   private readonly startY: number;
   private framesSinceProgress = 0;
 
@@ -57,7 +63,8 @@ export class Car {
 
   private trackProgress(): void {
     if (this.type === "DUMMY") return;
-    const distance = this.startY - this.y;
+    this.odometer += this.speed;
+    const distance = this.fitness === "forward" ? this.startY - this.y : this.odometer;
     if (distance > this.progress + 1) {
       this.progress = distance;
       this.framesSinceProgress = 0;
@@ -102,14 +109,26 @@ export class Car {
     this.y -= Math.cos(this.angle) * this.speed;
   }
 
+  /** Car body with a windshield so heading reads at a glance (the course uses a car sprite). */
   draw(ctx: CanvasRenderingContext2D, fill: string, sensorColor?: string): void {
     if (this.sensor && sensorColor) drawSensor(ctx, this.sensor, sensorColor);
+    ctx.save();
+    ctx.translate(this.x, this.y);
+    ctx.rotate(-this.angle);
+    const w = this.width;
+    const h = this.height;
     ctx.fillStyle = fill;
     ctx.beginPath();
-    ctx.moveTo(this.polygon[0].x, this.polygon[0].y);
-    for (let i = 1; i < this.polygon.length; i++) ctx.lineTo(this.polygon[i].x, this.polygon[i].y);
-    ctx.closePath();
+    ctx.roundRect(-w / 2, -h / 2, w, h, w * 0.28);
     ctx.fill();
+    ctx.fillStyle = "rgba(20, 24, 26, 0.55)";
+    ctx.beginPath();
+    ctx.roundRect(-w / 2 + 4, -h / 2 + h * 0.2, w - 8, h * 0.2, 3);
+    ctx.fill();
+    ctx.beginPath();
+    ctx.roundRect(-w / 2 + 5, h / 2 - h * 0.24, w - 10, h * 0.12, 3);
+    ctx.fill();
+    ctx.restore();
   }
 
   dispose(): void {

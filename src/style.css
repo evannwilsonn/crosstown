@@ -16,6 +16,16 @@
   --sign-blue: #3b7bd6;
   --construction: #f2701f;
   --ink-muted: #b9bfc2;
+  --signal-red: #e5483b;
+  --signal-green: #3fc27a;
+
+  /* Virtual world scenery */
+  --ground: #232b26;
+  --ground-shadow: #161c18;
+  --wall: #d9dcd6;
+  --wall-edge: #9aa1a5;
+  --roof: #a8473b;
+  --roof-edge: #943d33;
 
   --radius-sign: 12px;
   --radius-control: 8px;
@@ -177,6 +187,7 @@ input[type="range"]:focus-visible { outline: 2px solid var(--marking-yellow); ou
 .btn--primary { background: var(--construction); border-color: var(--construction); color: #1a1a1a; }
 .btn--primary:hover { background: #ff8436; }
 .btn--quiet { border-color: var(--shoulder); color: var(--ink-muted); }
+.btn--span { grid-column: 1 / -1; }
 .btn[aria-pressed="true"] { background: var(--marking-yellow); border-color: var(--marking-yellow); color: #1a1a1a; }
 
 .status { margin: 0; color: var(--ink-muted); font-size: 14px; min-height: 2.4em; }
@@ -185,7 +196,92 @@ input[type="range"]:focus-visible { outline: 2px solid var(--marking-yellow); ou
   position: absolute; width: 1px; height: 1px; overflow: hidden; clip: rect(0 0 0 0); white-space: nowrap;
 }
 
+/* Virtual world */
+.world-panel { background: var(--ground); }
+#world { display: block; width: 100%; height: 100%; outline: none; touch-action: none; cursor: crosshair; }
+#world:focus-visible { box-shadow: inset 0 0 0 3px var(--marking-yellow); }
+.is-driving #world { cursor: default; }
+
+.map-overlay {
+  position: absolute;
+  right: 16px;
+  bottom: 16px;
+  display: grid;
+  gap: 8px;
+  justify-items: end;
+}
+#minimap {
+  width: 180px;
+  height: 180px;
+  border-radius: var(--radius-sign);
+  background: var(--sign-green);
+  box-shadow: inset 0 0 0 3px var(--sign-green), inset 0 0 0 5px var(--marking-white);
+}
+.zoom { display: flex; gap: 6px; }
+.icon-btn {
+  min-width: 36px;
+  height: 36px;
+  border-radius: var(--radius-control);
+  border: 1.5px solid var(--shoulder);
+  background: var(--asphalt-deep);
+  color: var(--marking-white);
+  font: 800 18px/1 var(--font);
+  cursor: pointer;
+}
+.icon-btn--wide { font-size: 14px; padding: 0 12px; }
+.icon-btn:hover { border-color: var(--marking-white); }
+.icon-btn:focus-visible { outline: 2px solid var(--marking-yellow); outline-offset: 2px; }
+
+.tools {
+  border: 0;
+  margin: 12px 0 0;
+  padding: 0;
+  display: grid;
+  grid-template-columns: repeat(4, 1fr);
+  gap: 6px;
+}
+.tools label { position: relative; }
+.tools input { position: absolute; opacity: 0; inset: 0; cursor: pointer; }
+.tools span {
+  display: block;
+  padding: 9px 4px 7px;
+  text-align: center;
+  border-radius: var(--radius-control);
+  border: 1.5px solid var(--shoulder);
+  font-weight: 800;
+  font-size: 13px;
+}
+.tools input:checked + span { background: var(--marking-white); color: var(--asphalt-deep); border-color: var(--marking-white); }
+.tools input:focus-visible + span { outline: 2px solid var(--marking-yellow); outline-offset: 2px; }
+.tools:disabled span { opacity: 0.4; }
+
+.help { margin: 12px 0 0; font-size: 14px; }
+.help--quiet { margin-top: 6px; color: var(--ink-muted); font-size: 13px; }
+
+.file-btn { position: relative; display: inline-flex; align-items: center; justify-content: center; }
+.file-btn input { position: absolute; inset: 0; opacity: 0; cursor: pointer; }
+.file-btn:focus-within { outline: 2px solid var(--marking-yellow); outline-offset: 2px; }
+
+.osm summary { cursor: pointer; font-weight: 600; }
+.osm summary:focus-visible { outline: 2px solid var(--marking-yellow); outline-offset: 2px; border-radius: 4px; }
+.osm ol { margin: 10px 0; padding-left: 20px; display: grid; gap: 4px; color: var(--ink-muted); font-size: 14px; }
+.osm a { color: var(--marking-yellow); }
+.osm pre {
+  margin: 0 0 8px;
+  padding: 10px;
+  border-radius: var(--radius-control);
+  background: var(--asphalt-deep);
+  font-size: 11.5px;
+  line-height: 1.45;
+  white-space: pre-wrap;
+  word-break: break-word;
+  max-height: 160px;
+  overflow: auto;
+}
+
 @media (max-width: 760px) {
+  .map-overlay { right: 10px; bottom: 10px; }
+  #minimap { width: 120px; height: 120px; }
   .app { grid-template-columns: 1fr; height: auto; }
   .road-panel { height: 62vh; }
   .rail { border-left: 0; padding: 14px 16px 24px; }
