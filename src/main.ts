@@ -4,7 +4,8 @@ import { LEVELS, Simulation, type SavedState } from "./simulation";
 import { drawGenome } from "./visualizer";
 import { drawLearningCurve } from "./chart";
 
-// NEAT replaced the fixed network; the whole population and level are saved, not one brain.
+// Learning lasts for the tab session: a refresh or leaving and coming back in the same tab picks
+// up where it left off; closing the tab or window starts over from random brains.
 const STORAGE_KEY = "sdc.neat.v1";
 /** Max speed runs as many steps as fit in this much of each frame. */
 const MAX_BUDGET_MS = 14;
@@ -54,7 +55,8 @@ const palette = {
 /* Storage is a convenience: the page works when it is blocked. Learning picks up where it left off. */
 function loadState(): SavedState | null {
   try {
-    const raw = localStorage.getItem(STORAGE_KEY);
+    localStorage.removeItem(STORAGE_KEY); // earlier versions kept progress forever
+    const raw = sessionStorage.getItem(STORAGE_KEY);
     const s = raw ? (JSON.parse(raw) as SavedState) : null;
     return s?.neat?.inputs === 5 && Array.isArray(s.neat.genomes) && s.neat.genomes.length ? s : null;
   } catch {
@@ -63,8 +65,8 @@ function loadState(): SavedState | null {
 }
 function saveState(): void {
   try {
-    if (sim.generation > 1) localStorage.setItem(STORAGE_KEY, JSON.stringify(sim.toJSON()));
-    else localStorage.removeItem(STORAGE_KEY);
+    if (sim.generation > 1) sessionStorage.setItem(STORAGE_KEY, JSON.stringify(sim.toJSON()));
+    else sessionStorage.removeItem(STORAGE_KEY);
   } catch {
     /* ignore */
   }
