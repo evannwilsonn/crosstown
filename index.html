@@ -3,8 +3,8 @@
   <head>
     <meta charset="UTF-8" />
     <meta name="viewport" content="width=device-width, initial-scale=1" />
-    <title>Virtual World</title>
-    <meta name="description" content="Draw a road network, generate a town around it, and let self-driving cars learn to drive it." />
+    <title>Crosstown</title>
+    <meta name="description" content="Cars learn to find their way across town against the clock, growing NEAT brains from scratch. Draw your own map and they learn that too." />
     <link rel="preconnect" href="https://fonts.googleapis.com" />
     <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin />
     <link href="https://fonts.googleapis.com/css2?family=Overpass:wght@400;600;800&display=swap" rel="stylesheet" />
@@ -13,105 +13,134 @@
     <div class="app">
       <main class="road-panel world-panel">
         <canvas id="world" tabindex="0" aria-label="World editor. Roads, buildings and trees. Use the tool palette to edit; the minimap shows the whole network."></canvas>
+        <div class="hud">
+          <section class="sign" aria-label="Level">
+            <p class="hud-kicker"><span id="stat-level-kicker">Level</span> <b id="stat-level-num">1</b></p>
+            <p class="hud-title" id="stat-level">Stay on the road for 45 s</p>
+            <p class="hud-place" id="stat-place">Sample town</p>
+            <ol class="pips" id="stat-pips" aria-label="Trips" hidden></ol>
+          </section>
+          <dl class="hud-stats" aria-label="This generation">
+            <div><dt>Gen</dt><dd id="stat-generation">1</dd></div>
+            <div><dt>Driving</dt><dd id="stat-alive">Parked</dd></div>
+            <div><dt>Trip</dt><dd id="stat-run">0 m</dd></div>
+          </dl>
+          <p id="osm-credit" class="map-credit" hidden>Map data © <a href="https://www.openstreetmap.org/copyright" target="_blank" rel="noopener">OpenStreetMap contributors</a>, ODbL</p>
+        </div>
         <div class="map-overlay">
           <div class="zoom" role="group" aria-label="Zoom">
+            <button id="mini-toggle" class="icon-btn icon-btn--wide mini-toggle" type="button" aria-pressed="false" aria-controls="minimap">Map</button>
             <button id="zoom-in" class="icon-btn" type="button" aria-label="Zoom in">+</button>
             <button id="zoom-out" class="icon-btn" type="button" aria-label="Zoom out">−</button>
             <button id="zoom-fit" class="icon-btn icon-btn--wide" type="button">Fit</button>
           </div>
           <canvas id="minimap" width="180" height="180" aria-label="Minimap"></canvas>
         </div>
-        <p id="osm-credit" class="map-credit" hidden>Map data © <a href="https://www.openstreetmap.org/copyright" target="_blank" rel="noopener">OpenStreetMap contributors</a>, ODbL</p>
+        <p id="status" class="vms" role="status" aria-live="polite">Sample town loaded. Pick a tool, or press Train the cars.</p>
       </main>
 
       <aside class="rail">
-        <header class="sign sign--title">
-          <h1>Virtual world</h1>
-          <p>Draw roads, place markings, and the town builds itself around them. Then send out cars with the smallest possible brains: they grow neurons as they learn to stay on the road, find a destination, and then find any destination.</p>
+        <header class="brand">
+          <div class="brand-row">
+            <div class="sign"><h1>Crosstown</h1></div>
+            <a class="sister" href="https://github.com/evannwilsonn/fastlane" target="_blank" rel="noopener">Fastlane &#8599;</a>
+          </div>
+          <p class="brand-tagline">Cars learn to find their way across town against the clock.</p>
+          <details class="disclosure about">
+            <summary>How it works</summary>
+            <p>Every car starts with the smallest possible brain: sensors and a GPS arrow wired straight to the controls. They grow neurons as they learn to stay on the road, then to reach a target, then to reach it through detours, darkness, weather and traffic. A new town arrives every six levels. Draw your own map and they'll learn that too.</p>
+          </details>
         </header>
 
-        <section class="panel" aria-labelledby="tools-title">
-          <div class="panel-head">
-            <h2 id="tools-title">Edit the map</h2>
-          </div>
-          <fieldset id="tools" class="tools">
-            <legend class="visually-hidden">Tool</legend>
-            <label><input type="radio" name="tool" value="roads" checked /><span>Roads</span></label>
-            <label><input type="radio" name="tool" value="stop" /><span>Stop</span></label>
-            <label><input type="radio" name="tool" value="yield" /><span>Yield</span></label>
-            <label><input type="radio" name="tool" value="light" /><span>Light</span></label>
-            <label><input type="radio" name="tool" value="crossing" /><span>Crossing</span></label>
-            <label><input type="radio" name="tool" value="parking" /><span>Parking</span></label>
-            <label><input type="radio" name="tool" value="start" /><span>Start</span></label>
-            <label><input type="radio" name="tool" value="target" /><span>Target</span></label>
-          </fieldset>
-          <p id="tool-help" class="help">Click empty ground to add an intersection. Click another to connect them. Drag to move one, right-click to delete it.</p>
-          <p class="help help--quiet">Scroll to zoom. Hold Space and drag, or drag with the middle button, to pan.</p>
-        </section>
+        <div class="tabs" role="tablist" aria-label="Sections">
+          <button class="tab" role="tab" id="tab-drive" aria-controls="panel-drive" aria-selected="true">Drive</button>
+          <button class="tab" role="tab" id="tab-edit" aria-controls="panel-edit" aria-selected="false" tabindex="-1">Edit map</button>
+          <button class="tab" role="tab" id="tab-maps" aria-controls="panel-maps" aria-selected="false" tabindex="-1">My maps</button>
+        </div>
 
-        <section class="sign sign--guide" aria-label="Driving progress">
-          <dl>
-            <div><dt>Generation</dt><dd id="stat-generation">Parked</dd></div>
-            <div><dt>Still driving</dt><dd id="stat-alive">0</dd></div>
-            <div><dt>This run</dt><dd id="stat-run">0 m</dd></div>
-            <div><dt>Level</dt><dd id="stat-level">1</dd></div>
-          </dl>
-        </section>
+        <div class="tabpanel" role="tabpanel" id="panel-drive" aria-labelledby="tab-drive">
+          <section class="panel run" aria-label="Run">
+            <fieldset id="speed" class="segmented">
+              <legend>Speed</legend>
+              <label><input type="radio" name="speed" value="1" checked /><span>1×</span></label>
+              <label><input type="radio" name="speed" value="3" /><span>3×</span></label>
+              <label><input type="radio" name="speed" value="max" /><span>Max</span></label>
+            </fieldset>
+            <div class="actions">
+              <button id="train" class="btn btn--primary" type="button">Train the cars</button>
+              <button id="drive-self" class="btn" type="button">Drive it yourself</button>
+              <button id="stop-driving" class="btn btn--quiet btn--span" type="button" disabled>Park and edit</button>
+              <button id="back-to-levels" class="btn btn--span" type="button" hidden>Back to the levels</button>
+            </div>
+          </section>
 
-        <section class="panel" aria-labelledby="chart-title">
-          <div class="panel-head">
-            <h2 id="chart-title">Learning curve</h2>
-            <p class="legend">Best score per generation</p>
-          </div>
-          <canvas id="chart" aria-label="Chart: each generation's best score, by level. Dots mark generations where the best brain grew."></canvas>
-        </section>
+          <section class="panel" aria-labelledby="chart-title">
+            <div class="panel-head">
+              <h2 id="chart-title">Learning curve</h2>
+              <p class="legend">Best score per generation</p>
+            </div>
+            <canvas id="chart" aria-label="Chart: each generation's best score, by level. Dots mark generations where the best brain grew."></canvas>
+          </section>
 
-        <section class="panel brain" aria-labelledby="brain-title">
-          <div class="panel-head">
-            <h2 id="brain-title">Leader's brain</h2>
-            <p class="legend">
-              <span class="swatch swatch--pos"></span>Excites
-              <span class="swatch swatch--neg"></span>Inhibits
-            </p>
-          </div>
-          <canvas id="brain" aria-label="The leading car's brain as it has grown: seven sensors, the car's speed and a GPS direction at the bottom, four controls at the top (forward, left, right, reverse), and any hidden neurons evolution has added between them."></canvas>
-          <p id="brain-note" class="help help--quiet"></p>
-        </section>
+          <section class="panel brain" aria-labelledby="brain-title">
+            <div class="panel-head">
+              <h2 id="brain-title">Leader's brain</h2>
+              <p class="legend">
+                <span class="swatch swatch--pos"></span>Excites
+                <span class="swatch swatch--neg"></span>Inhibits
+              </p>
+            </div>
+            <canvas id="brain" aria-label="The leading car's brain as it has grown: seven sensors, the car's speed, a GPS direction and the road condition at the bottom, four controls at the top (forward, left, right, reverse), and any hidden neurons evolution has added between them."></canvas>
+            <p id="brain-note" class="help help--quiet"></p>
+          </section>
 
-        <section class="panel controls" aria-labelledby="drive-title">
-          <h2 id="drive-title" class="visually-hidden">Driving</h2>
-          <label class="field">
-            <span class="field-label">Cars per generation <output id="population-out" for="population">100</output></span>
-            <input id="population" type="range" min="10" max="300" step="10" value="100" />
-          </label>
-          <label class="field">
-            <span class="field-label">Mutation <output id="mutation-out" for="mutation">10%</output></span>
-            <input id="mutation" type="range" min="0" max="0.5" step="0.01" value="0.1" />
-          </label>
-          <fieldset id="speed" class="segmented">
-            <legend>Sim speed</legend>
-            <label><input type="radio" name="speed" value="1" checked /><span>1×</span></label>
-            <label><input type="radio" name="speed" value="3" /><span>3×</span></label>
-            <label><input type="radio" name="speed" value="max" /><span>Max</span></label>
-          </fieldset>
-          <label class="toggle">
-            <input id="sensors" type="checkbox" checked />
-            <span>Show the leader's sensors</span>
-          </label>
-          <div class="actions">
-            <button id="train" class="btn btn--primary" type="button">Train the cars</button>
-            <button id="drive-self" class="btn" type="button">Drive it yourself</button>
-            <button id="stop-driving" class="btn btn--quiet" type="button" disabled>Park and edit</button>
-            <button id="forget" class="btn btn--quiet" type="button">Reset learning</button>
-            <button id="back-to-levels" class="btn btn--span" type="button" hidden>Back to the levels</button>
-          </div>
-        </section>
+          <section class="panel">
+            <details class="disclosure">
+              <summary>Tuning</summary>
+              <div class="controls">
+                <label class="field">
+                  <span class="field-label">Cars per generation <output id="population-out" for="population">100</output></span>
+                  <input id="population" type="range" min="10" max="300" step="10" value="100" />
+                </label>
+                <label class="field">
+                  <span class="field-label">Mutation <output id="mutation-out" for="mutation">10%</output></span>
+                  <input id="mutation" type="range" min="0" max="0.5" step="0.01" value="0.1" />
+                </label>
+                <label class="toggle">
+                  <input id="sensors" type="checkbox" checked />
+                  <span>Show the leader's sensors</span>
+                </label>
+              </div>
+            </details>
+          </section>
+        </div>
 
-        <section class="panel controls" aria-labelledby="map-title">
-          <div class="panel-head">
-            <h2 id="map-title">Map file</h2>
-            <span class="legend">Saves in this browser as you edit</span>
-          </div>
+        <div class="tabpanel" role="tabpanel" id="panel-edit" aria-labelledby="tab-edit" hidden>
+          <p class="callout" id="edit-parked-note" hidden><span>The cars are driving. Park them to edit.</span><button id="park-edit" class="btn" type="button">Park</button></p>
+          <section class="panel" aria-labelledby="tools-title">
+            <div class="panel-head">
+              <h2 id="tools-title">Draw</h2>
+            </div>
+            <fieldset id="tools" class="tools">
+              <legend class="visually-hidden">Tool</legend>
+              <label><input type="radio" name="tool" value="roads" checked /><span>Roads</span></label>
+              <label><input type="radio" name="tool" value="stop" /><span>Stop</span></label>
+              <label><input type="radio" name="tool" value="yield" /><span>Yield</span></label>
+              <label><input type="radio" name="tool" value="light" /><span>Light</span></label>
+              <label><input type="radio" name="tool" value="crossing" /><span>Crossing</span></label>
+              <label><input type="radio" name="tool" value="parking" /><span>Parking</span></label>
+              <label><input type="radio" name="tool" value="start" /><span>Start</span></label>
+              <label><input type="radio" name="tool" value="target" /><span>Target</span></label>
+            </fieldset>
+            <p id="tool-help" class="help">Click empty ground to add an intersection. Click another to connect them. Drag to move one, right-click to delete it.</p>
+            <p class="help help--quiet">Scroll to zoom. Hold Space and drag, or drag with the middle button, to pan.</p>
+          </section>
+
+          <section class="panel controls" aria-labelledby="map-title">
+            <div class="panel-head">
+              <h2 id="map-title">Map file</h2>
+              <span class="legend">Saves in this browser as you edit</span>
+            </div>
           <p class="help help--quiet">Draw on the map or bring in your own to train on it. Training there never changes the level brains.</p>
           <div class="actions">
             <label class="btn file-btn">
@@ -123,7 +152,7 @@
             <button id="course-city" class="btn btn--quiet" type="button">Load the course city</button>
             <button id="clear" class="btn btn--quiet btn--span" type="button">Clear the map</button>
           </div>
-          <details class="osm">
+          <details class="disclosure osm">
             <summary>Use a real city from OpenStreetMap</summary>
             <ol>
               <li>Open <a href="https://overpass-turbo.eu" target="_blank" rel="noopener">overpass-turbo.eu</a> and frame a few blocks.</li>
@@ -133,13 +162,15 @@
             <pre id="overpass-query" tabindex="0"></pre>
             <button id="copy-query" class="btn btn--quiet" type="button">Copy query</button>
           </details>
-        </section>
+          </section>
+        </div>
 
-        <section class="panel controls" aria-labelledby="my-maps-title">
-          <div class="panel-head">
-            <h2 id="my-maps-title">My maps</h2>
-            <span class="legend">Kept in this browser</span>
-          </div>
+        <div class="tabpanel" role="tabpanel" id="panel-maps" aria-labelledby="tab-maps" hidden>
+          <section class="panel controls" aria-labelledby="my-maps-title">
+            <div class="panel-head">
+              <h2 id="my-maps-title">My maps</h2>
+              <span class="legend">Kept in this browser</span>
+            </div>
           <label class="field">
             <span class="field-label">Saved maps</span>
             <select id="my-maps" class="select"></select>
@@ -158,9 +189,12 @@
           </label>
           <p id="share-help" class="help help--quiet" hidden>Only the roads and markings are sent, never your name or email. Leave it unchecked to keep the map in this browser only.</p>
           <button id="save-map" class="btn btn--primary" type="button">Save to My maps</button>
-        </section>
+          </section>
+        </div>
 
-        <p id="status" class="status" role="status" aria-live="polite">Sample town loaded. Pick a tool, or press Train the cars.</p>
+        <footer class="rail-foot">
+          <button id="forget" class="link-btn" type="button">Reset learning</button>
+        </footer>
       </aside>
     </div>
     <script type="module" src="/src/world/main.ts"></script>

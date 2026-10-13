@@ -9,7 +9,7 @@ import { SURVIVE_FRAMES, WORLD_INPUTS, WorldSim, worldLevelSpec, type WorldSaved
 import { drawClosures, drawGround, drawHeadlights, drawIce, drawLamps, drawSea, drawTint, drawWeather } from "./scenery";
 import { CLOSURE_STYLE, HAZARD_HINTS } from "./hazards";
 import { generateMap } from "./mapgen";
-import { themeAt, WORLD_THEMES, type TimeOfDay, type WorldThemeName } from "./worldThemes";
+import { themeAt, townLook, WORLD_THEMES, type TimeOfDay, type WorldThemeName } from "./worldThemes";
 import { MAX_SHARE_BYTES, startSharing, type Sharing } from "./share";
 import { drawLearningCurve } from "../chart";
 import { Genome } from "../neat";
@@ -50,6 +50,13 @@ const ui = {
   alive: $("#stat-alive"),
   run: $("#stat-run"),
   level: $("#stat-level"),
+  levelNum: $("#stat-level-num"),
+  levelKicker: $("#stat-level-kicker"),
+  place: $("#stat-place"),
+  pips: $<HTMLOListElement>("#stat-pips"),
+  miniToggle: $<HTMLButtonElement>("#mini-toggle"),
+  parkNote: $("#edit-parked-note"),
+  parkEdit: $<HTMLButtonElement>("#park-edit"),
   speed: $<HTMLFieldSetElement>("#speed"),
   brainNote: $("#brain-note"),
   population: $<HTMLInputElement>("#population"),
@@ -239,6 +246,35 @@ function setTool(tool: string): void {
 
 function announce(msg: string): void {
   ui.status.textContent = msg;
+  // Replay the board's entrance so a new message is noticed.
+  ui.status.classList.remove("is-fresh");
+  void ui.status.offsetWidth;
+  ui.status.classList.add("is-fresh");
+}
+
+/** Trip pips: done trips white, the one being driven yellow. Hidden when a level has one trip. */
+function setPips(done: number, total: number): void {
+  ui.pips.hidden = total < 2;
+  const key = `${done}/${total}`;
+  if (ui.pips.hidden || ui.pips.dataset.key === key) return;
+  ui.pips.dataset.key = key;
+  ui.pips.replaceChildren(
+    ...Array.from({ length: total }, (_, i) => {
+      const li = document.createElement("li");
+      li.className = i < done ? "is-done" : i === done ? "is-now" : "";
+      return li;
+    }),
+  );
+  const caption = document.createElement("span");
+  caption.textContent = `Trip ${Math.min(done + 1, total)} of ${total}`;
+  ui.pips.append(caption);
+}
+
+/** Which town a level is in, as the HUD's place line. */
+function placeName(map: number): string {
+  if (map === 0) return "Sample town";
+  const look = townLook(map);
+  return themeAt(look.theme, look.time).name;
 }
 
 /* Generation: roads at once, scenery once edits pause. */
@@ -433,7 +469,7 @@ function frame(nowMs: number): void {
   ctx.globalAlpha = 1;
   ctx.restore();
 
-  drawMinimap(
+  if (mini.clientWidth) drawMinimap(
     miniCtx, mini.clientWidth, mini.clientHeight, world.graph, viewport.center,
     { width: w / viewport.zoom, height: h / viewport.zoom }, sim.cars, sim.followed,
     { road: paint.white, car: paint.yellow, view: paint.yellow },
@@ -445,14 +481,18 @@ function frame(nowMs: number): void {
   if (nowMs - lastStats > 150) {
     lastStats = nowMs;
     const driving = sim.mode !== "off";
-    ui.generation.textContent = !driving ? "Parked" : sim.mode === "KEYS" ? "Manual" : String(sim.generation);
-    ui.alive.textContent = !driving ? "0" : `${sim.alive} of ${sim.cars.length}`;
+    ui.generation.textContent = sim.mode === "KEYS" ? "Manual" : String(sim.generation);
+    ui.alive.textContent = !driving ? "Parked" : `${sim.alive}/${sim.cars.length}`;
     ui.run.textContent = !driving || !sim.followed
       ? "0 m"
       : sim.levelSpec.goal === "survive"
-        ? `${meters(sim.followed.progress)}, ${Math.floor(Math.min(sim.frames, SURVIVE_FRAMES) / 60)} of ${SURVIVE_FRAMES / 60} s`
-        : `${meters(sim.remaining(sim.followed))} to go, ${(sim.frames / 60).toFixed(0)} of ${((sim.timeLimit ?? 0) / 60).toFixed(0)} s${sim.tripsPerGeneration > 1 ? `, trip ${sim.trip + 1}/${sim.tripsPerGeneration}` : ""}`;
-    ui.level.textContent = sim.custom ? `Your map (levels wait at ${sim.level})` : `${sim.level}: ${sim.levelSpec.name}`;
+        ? `${meters(sim.followed.progress)}, ${Math.floor(Math.min(sim.frames, SURVIVE_FRAMES) / 60)}/${SURVIVE_FRAMES / 60} s`
+        : `${meters(sim.remaining(sim.followed))} to go, ${(sim.frames / 60).toFixed(0)}/${((sim.timeLimit ?? 0) / 60).toFixed(0)} s`;
+    ui.levelKicker.textContent = sim.custom ? "Your map" : "Level";
+    ui.levelNum.textContent = sim.custom ? "" : String(sim.level);
+    ui.level.textContent = sim.custom ? "Reach your target in time" : sim.levelSpec.name;
+    ui.place.textContent = sim.custom ? `The levels wait at level ${sim.level}` : placeName(sim.levelSpec.map);
+    setPips(driving && sim.mode === "AI" ? sim.trip : 0, sim.levelSpec.goal === "survive" || sim.custom ? 1 : sim.tripsPerGeneration);
     if (sim.mode === "KEYS" && sim.followed && !arrivalAnnounced) {
       const secs = sim.arrivalSeconds(sim.followed);
       if (secs !== null) {
@@ -584,6 +624,7 @@ function setDriving(on: boolean): void {
   ui.train.disabled = on;
   ui.driveSelf.disabled = on;
   document.body.classList.toggle("is-driving", on);
+  ui.parkNote.hidden = !on;
   if (on) {
     editor?.disable();
     editor = null;
@@ -619,6 +660,32 @@ function stopDriving(): void {
 
 ui.train.addEventListener("click", () => startDriving("AI"));
 ui.driveSelf.addEventListener("click", () => startDriving("KEYS"));
+/* Rail tabs: driving, editing and saved maps. Arrow keys move between tabs. */
+const tabs = [...document.querySelectorAll<HTMLButtonElement>('[role="tab"]')];
+function selectTab(tab: HTMLButtonElement, focus = false): void {
+  for (const t of tabs) {
+    const on = t === tab;
+    t.setAttribute("aria-selected", String(on));
+    t.tabIndex = on ? 0 : -1;
+    document.getElementById(t.getAttribute("aria-controls")!)!.hidden = !on;
+  }
+  if (focus) tab.focus();
+}
+for (const [i, tab] of tabs.entries()) {
+  tab.addEventListener("click", () => selectTab(tab));
+  tab.addEventListener("keydown", (e) => {
+    const step = e.key === "ArrowRight" ? 1 : e.key === "ArrowLeft" ? -1 : 0;
+    if (step) selectTab(tabs[(i + step + tabs.length) % tabs.length], true);
+  });
+}
+
+ui.miniToggle.addEventListener("click", () => {
+  const open = !mini.parentElement!.classList.contains("is-open");
+  mini.parentElement!.classList.toggle("is-open", open);
+  ui.miniToggle.setAttribute("aria-pressed", String(open));
+});
+ui.parkEdit.addEventListener("click", () => ui.stop.click());
+
 ui.stop.addEventListener("click", () => {
   stopDriving();
   announce("Parked. The map is editable again.");
