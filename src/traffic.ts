@@ -4,7 +4,14 @@ import { mulberry32 } from "./utils";
 
 export type TrafficLayout = "course" | "endless";
 
+/** Spacing between rows and traffic speed; levels tighten both. */
+export interface TrafficOptions {
+  rowGap?: number;
+  speed?: number;
+}
+
 const ROW_GAP = 210;
+const TRAFFIC_SPEED = 2;
 const FIRST_ROW_Y = -350; // room to reach speed and see the first row before it arrives
 
 /**
@@ -16,7 +23,12 @@ export class TrafficCourse {
   private rng: () => number;
   private nextRowY = FIRST_ROW_Y;
 
-  constructor(private road: Road, seed: number, public layout: TrafficLayout = "endless") {
+  private rowGap: number;
+  private speed: number;
+
+  constructor(private road: Road, seed: number, public layout: TrafficLayout = "endless", options: TrafficOptions = {}) {
+    this.rowGap = options.rowGap ?? ROW_GAP;
+    this.speed = options.speed ?? TRAFFIC_SPEED;
     this.rng = mulberry32(seed);
     if (layout === "course") this.placeCourseLayout();
   }
@@ -25,7 +37,7 @@ export class TrafficCourse {
   private placeCourseLayout(): void {
     const rows: [number, number][] = [[1, -100], [0, -300], [2, -300], [0, -500], [1, -500], [1, -700], [2, -700]];
     for (const [lane, y] of rows) {
-      const car = new Car(this.road.getLaneCenter(lane), y, 30, 50, "DUMMY", 2);
+      const car = new Car(this.road.getLaneCenter(lane), y, 30, 50, "DUMMY", this.speed);
       car.color = `hsl(${290 + this.rng() * 260}, 100%, 60%)`;
       this.cars.push(car);
     }
@@ -59,16 +71,20 @@ export class TrafficCourse {
       }
       for (const lane of blocked) {
         const jitter = (this.rng() - 0.5) * 40;
-        const car = new Car(this.road.getLaneCenter(lane), this.nextRowY + jitter, 30, 50, "DUMMY", 2);
+        const car = new Car(this.road.getLaneCenter(lane), this.nextRowY + jitter, 30, 50, "DUMMY", this.speed);
+        if (this.cars.length) car.speed = this.cars[0].speed; // join the flow at its speed
         car.color = `hsl(${290 + this.rng() * 260}, 100%, 60%)`; // the course's getRandomColor, seeded
         this.cars.push(car);
       }
-      this.nextRowY -= ROW_GAP;
+      this.nextRowY -= this.rowGap;
     }
   }
 
   update(): void {
     for (const car of this.cars) car.update([], []);
+    // Rows ahead are placed relative to the moving traffic, not the map: without this, rows made
+    // later land closer to the ones already driving, and the spacing collapses as the run goes on.
+    this.nextRowY -= this.cars[0]?.speed ?? 0;
   }
 
   /** Traffic within `range` of y, for cheaper collision and sensor checks. */

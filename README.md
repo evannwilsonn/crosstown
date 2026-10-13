@@ -1,10 +1,10 @@
 # Self-Driving Car + Virtual World
 
-A population of cars learns to drive through traffic using a tiny neural network and a genetic algorithm. No training data, no libraries: every car senses the road with five rays, a 5 → 6 → 4 network turns those readings into steering, and after each run the farthest driver's brain is copied and mutated to breed the next generation.
+A population of cars learns to drive through traffic with no training data and no libraries. Every car senses the road with five rays and starts with the smallest possible brain, sensors wired straight to its controls. The highway evolves those brains with NEAT, so the network itself grows new neurons and connections as the traffic gets harder, level after level.
 
 Phase 2 (`world.html`) builds a virtual town around a road network you draw: road borders, buildings and trees in pseudo 3D, road markings with working traffic lights, OpenStreetMap import and a minimap. The same cars then learn to drive its streets.
 
-Written in TypeScript with the Canvas API. A port of Radu Mariescu-Istodor's two freeCodeCamp courses ([Self-driving car](https://github.com/gniziemazity/Self-driving-car), [Virtual world](https://github.com/gniziemazity/virtual-world), both MIT), rebuilt with typed modules, tests, automatic generations and a redesigned interface.
+Written in TypeScript with the Canvas API. A port of Radu Mariescu-Istodor's two freeCodeCamp courses ([Self-driving car](https://github.com/gniziemazity/Self-driving-car), [Virtual world](https://github.com/gniziemazity/virtual-world), both MIT), rebuilt with typed modules, tests, automatic generations and a redesigned interface. The highway goes beyond the course: NEAT instead of a fixed network, and levels that keep getting harder.
 
 ## Run it
 
@@ -22,13 +22,14 @@ Arrow keys or W A S D drive the car in "Drive it yourself" mode.
 
 | Step | In this project |
 | --- | --- |
-| Problem | Get a car past traffic on a three-lane road without crashing, with no labelled data. Two traffic modes: Course (the video's exact seven cars, the default) and Endless (seeded rows forever). |
+| Problem | Get a car past traffic on a three-lane road without crashing, with no labelled data, and keep getting better as the traffic gets harder. |
 | Data | None up front. Each car's five ray sensors produce inputs every frame: 0 when the ray sees nothing, rising to 1 as an obstacle gets close. |
-| Baseline | Generation 1 is 100 random networks. Most crash within 100 m. |
-| Model | Feed-forward network, 5 inputs, 6 hidden, 4 outputs (forward, left, right, reverse), step activation. |
+| Baseline | Generation 1 is 100 random minimal networks: 5 sensors wired straight to 4 controls, no hidden neurons. Most crash within 100 m. |
+| Model | A NEAT genome (`src/neat.ts`, after Stanley & Miikkulainen 2002): any acyclic network of step neurons, 5 inputs and 4 outputs (forward, left, right, reverse), with as many hidden neurons as evolution has added. |
 | Evaluation | Fitness is distance gained on the traffic, not raw distance: traffic moves forward too, so raw distance rewards a car for tailgating, and that brain never learns to overtake and eventually rear-ends the car ahead. Every generation replays the same course, so runs are compared fairly. |
-| Improvement | The best car becomes the parent only if it beats the previous parent; car 0 of each generation is an unmutated copy, so progress never goes backwards. When a generation brings no improvement, mutation rises by half again (resetting on the next improvement), and 10% of cars get fresh random brains, so a stuck population can find new moves. In headless trials on the Course layout, 4 of 6 runs passed all seven cars within 35 generations. |
-| Deployment | `npm run build` emits a single HTML file for GitHub Pages or any static host. The best brain persists in the browser and can be copied as JSON. |
+| Improvement | NEAT breeds every generation: brains are grouped into species by structure and compete mostly within their species, so a new neuron gets time to prove itself; parents cross over gene by gene using innovation numbers; mutations nudge weights and sometimes add a connection or split one with a new neuron. The generation's best brain rides unchanged into the next one, so progress never goes backwards. |
+| Self-improvement | Seven levels. Level 1 is the course's seven cars; each later level is endless traffic with rows closer together and moving faster, unlocked when the best car passes the level's goal. Level 7 has no goal, so learning never runs out of road. In headless runs (`scripts/train.ts`), populations cleared level 1 in 8 to 86 generations and reached level 6 or 7 within about 130, with brains growing to between 1 and 8 hidden neurons along the way. The page saves the whole population and picks up where it left off. |
+| Deployment | `npm run build` emits a single HTML file for GitHub Pages or any static host. A learning curve charts each generation by level and marks when the best brain grew; the best brain copies out as JSON. |
 
 ## Virtual world (phase 2)
 
@@ -52,9 +53,9 @@ Traffic lights follow the course's controller: lights are grouped by nearest int
 
 Both ports were checked against the course videos' full transcripts as well as the course code; details the videos explain (the intersection epsilon that stops buildings flickering, animated dashed network connections, random traffic hues, editor overlay at 30%, parking lines across the lane, one-way roads from OpenStreetMap) are implemented.
 
-Endless traffic is generated so it is always passable: a two-lane block is never followed directly by another, and the open lane moves at most one lane between blocks. Without that rule, random rows can zig-zag the only gap across the road every 210 px, a weave no car can make. On Endless, the course's small 5-6-4 network typically plateaus after passing around eight cars.
+Endless traffic is generated so it is always passable: a two-lane block is never followed directly by another, and the open lane moves at most one lane between blocks. Rows are also placed relative to the moving traffic: placing them at fixed map positions (as earlier versions did) put each new row closer to the traffic already driving, so the spacing collapsed to under 100 px as a run went on and every population stalled around eight cars.
 
-`npx tsx scripts/train.ts <generations> <cars> <mutation> <frames> <course|endless>` trains headless and prints progress per generation.
+`npx tsx scripts/train.ts [generations] [cars] [mutation] [frame cap]` runs NEAT headless and prints each generation's level, cars passed and brain size.
 
 Deliberate differences from the course: lane guides are computed per road with an explicit direction (right-hand traffic), so markings always face the way cars drive; generations advance automatically with a 45 s cap, because distance-driven fitness never stalls for a car driving in circles; maps over 300 roads are view-and-drive only, since regenerating roads is quadratic.
 
@@ -63,12 +64,13 @@ Deliberate differences from the course: lane guides are computed per road with a
 ```
 src/
   utils.ts       segment intersection, polygon overlap, seeded RNG
-  network.ts     Level and NeuralNetwork: feed-forward, mutate, clone, JSON
+  neat.ts        NEAT: genomes, innovation numbers, speciation, crossover, growth
+  network.ts     the course's fixed-shape network (used by the virtual world)
   sensor.ts      ray casting against road edges and nearby traffic
   car.ts         physics, collision, progress tracking, drawing
   road.ts        road surface and US-style markings
   traffic.ts     lazily generated, seeded traffic rows (never blocks all lanes)
-  simulation.ts  generations, parent selection, mode switching
+  simulation.ts  levels, generations, NEAT breeding, saving
   visualizer.ts  draws the leader's network live
   main.ts        canvas, UI controls, storage
   world/         phase 2: geometry, graph, world generation, markings, editors, viewport, OSM, minimap, sim
@@ -81,5 +83,5 @@ The interface borrows from US highway signage: Overpass (an open-source revival 
 
 ## Next
 
-- Course phase 3: path-finding to the target marking, so cars drive somewhere instead of just far.
+- Bring NEAT and levels to the virtual world: drive without crashing, then reach the target, then reach it faster.
 - Replace the step activation with a smooth one and compare learning speed.

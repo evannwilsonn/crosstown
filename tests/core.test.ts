@@ -1,7 +1,8 @@
 import { describe, expect, it } from "vitest";
 import { getIntersection, mulberry32, polysIntersect } from "../src/utils";
 import { NeuralNetwork } from "../src/network";
-import { Simulation } from "../src/simulation";
+import { LEVELS, Simulation } from "../src/simulation";
+import { Genome, Innovations, Neat } from "../src/neat";
 
 describe("geometry", () => {
   it("finds where two crossing segments meet", () => {
@@ -72,20 +73,8 @@ describe("simulation", () => {
     expect([a(), a(), a()]).toEqual([b(), b(), b()]);
   });
 
-  it("keeps the better brain and advances the generation", () => {
-    const sim = new Simulation(0, 210, { population: 20, mutation: 0.1, seed: 1 }, null);
-    for (let i = 0; i < 200; i++) sim.step();
-    const leaderScore = sim.score(sim.leader);
-    sim.nextGeneration();
-    expect(sim.generation).toBe(2);
-    expect(sim.parent!.progress).toBe(leaderScore);
-    expect(sim.parent).not.toBeNull();
-    // The unmutated parent copy is car 0 in the new generation.
-    expect(JSON.stringify(sim.cars[0].brain!.toJSON())).toBe(JSON.stringify(sim.parent!.brain));
-  });
-
   it("gives a tailgater no credit: fitness is distance gained on the traffic", () => {
-    const sim = new Simulation(0, 210, { population: 1, mutation: 0, seed: 1, layout: "course" }, null);
+    const sim = new Simulation(0, 210, { population: 1, mutation: 0, seed: 1 });
     const car = sim.cars[0];
     car.brain = undefined; // drive it by hand at traffic speed
     for (let i = 0; i < 300; i++) {
@@ -96,12 +85,114 @@ describe("simulation", () => {
     expect(sim.score(car)).toBeLessThan(40); // ...but gained almost nothing on traffic
   });
 
-  it("raises mutation after generations without improvement", () => {
-    const sim = new Simulation(0, 210, { population: 5, mutation: 0.1, seed: 1 }, null);
-    sim.nextGeneration(); // first parent
-    sim.nextGeneration(); // replays the same brains: no improvement
-    expect(sim.stagnant).toBeGreaterThan(0);
-    expect(sim.mutationNow()).toBeGreaterThan(0.1);
+  it("starts on level 1 with minimal brains and breeds a new generation through NEAT", () => {
+    const sim = new Simulation(0, 210, { population: 20, mutation: 0.1, seed: 1 });
+    expect(sim.level).toBe(1);
+    expect(sim.course.cars).toHaveLength(7);
+    const first = sim.neat.genomes[0];
+    expect(first.hiddenCount).toBe(0);
+    expect(first.conns).toHaveLength(20); // 5 sensors x 4 controls
+    for (let i = 0; i < 200; i++) sim.step();
+    sim.nextGeneration();
+    expect(sim.generation).toBe(2);
+    expect(sim.cars).toHaveLength(20);
+    expect(sim.last).not.toBeNull();
+    // The best brain rides unchanged in slot 0.
+    expect(JSON.stringify((sim.cars[0].brain as Genome).toJSON())).toBe(JSON.stringify(sim.neat.champion!.toJSON()));
+  });
+
+  it("unlocks the next level when the leader reaches the goal", () => {
+    const sim = new Simulation(0, 210, { population: 1, mutation: 0, seed: 1 });
+    const car = sim.cars[0];
+    car.brain = undefined;
+    // Teleport past the seven course cars: reaching the goal ends the generation and levels up.
+    car.y = -2000;
+    let ended = false;
+    for (let i = 0; i < 5 && !ended; i++) ended = sim.step();
+    expect(ended).toBe(true);
+    expect(sim.last!.levelUp).toBe(true);
+    expect(sim.level).toBe(2);
+    expect(sim.course.layout).toBe("endless");
+  });
+
+  it("levels get denser and faster, and the last one never ends", () => {
+    for (let i = 2; i < LEVELS.length; i++) {
+      expect(LEVELS[i].rowGap).toBeLessThan(LEVELS[i - 1].rowGap);
+      expect(LEVELS[i].trafficSpeed).toBeGreaterThanOrEqual(LEVELS[i - 1].trafficSpeed);
+    }
+    expect(LEVELS[LEVELS.length - 1].goal).toBeNull();
+  });
+
+  it("saves and restores the population, level and generation", () => {
+    const sim = new Simulation(0, 210, { population: 10, mutation: 0.1, seed: 1 });
+    sim.nextGeneration();
+    const copy = new Simulation(0, 210, { population: 10, mutation: 0.1, seed: 1 }, JSON.parse(JSON.stringify(sim.toJSON())));
+    expect(copy.generation).toBe(2);
+    expect(copy.neat.genomes).toHaveLength(10);
+    expect(JSON.stringify(copy.neat.genomes[0].toJSON())).toBe(JSON.stringify(sim.neat.genomes[0].toJSON()));
+  });
+});
+
+describe("NEAT", () => {
+  const rand = mulberry32(3);
+  const setup = () => {
+    const inno = new Innovations(9);
+    return { inno, g: Genome.minimal(5, 4, inno, rand) };
+  };
+
+  it("gives the same change the same innovation number in different genomes", () => {
+    const inno = new Innovations(9);
+    const a = Genome.minimal(5, 4, inno, rand);
+    const b = Genome.minimal(5, 4, inno, rand);
+    expect(a.conns.map((c) => c.inn)).toEqual(b.conns.map((c) => c.inn));
+  });
+
+  it("adding a neuron splits a link: old one off, two new ones on", () => {
+    const { inno, g } = setup();
+    expect(g.addNode(inno, rand)).toBe(true);
+    expect(g.hiddenCount).toBe(1);
+    expect(g.conns.filter((c) => !c.enabled)).toHaveLength(1);
+    expect(g.enabledCount).toBe(21);
+    expect(g.activate([1, 0, 0.5, 0, 1])).toHaveLength(4);
+  });
+
+  it("never wires a loop, so every brain can be evaluated in one pass", () => {
+    const { inno, g } = setup();
+    for (let i = 0; i < 40; i++) {
+      g.addNode(inno, rand);
+      g.addConnection(inno, rand);
+    }
+    const out = g.activate([0.2, 0.4, 0, 1, 0.7]);
+    expect(out).toHaveLength(4);
+    out.forEach((v) => expect([0, 1]).toContain(v));
+    // Every enabled neuron got a value: none were stuck waiting on a loop.
+    for (const n of g.nodes) expect(g.values.has(n.id)).toBe(true);
+  });
+
+  it("crossover keeps the fitter parent's shape", () => {
+    const { inno, g } = setup();
+    const fitter = g.clone();
+    fitter.addNode(inno, rand);
+    const child = Genome.crossover(fitter, g, rand);
+    expect(child.conns.map((c) => c.inn)).toEqual(fitter.conns.map((c) => c.inn));
+    expect(child.hiddenCount).toBe(1);
+  });
+
+  it("measures identical brains as distance 0 and grown ones as further apart", () => {
+    const { inno, g } = setup();
+    const grown = g.clone();
+    grown.addNode(inno, rand);
+    expect(Genome.distance(g, g.clone())).toBe(0);
+    expect(Genome.distance(g, grown)).toBeGreaterThan(0);
+  });
+
+  it("keeps the population size and the champion through evolution", () => {
+    const neat = new Neat(5, 4, 30, mulberry32(9));
+    const scores = neat.genomes.map((_, i) => i);
+    const best = neat.genomes[29].toJSON();
+    neat.evolve(scores);
+    expect(neat.genomes).toHaveLength(30);
+    expect(JSON.stringify(neat.genomes[0].toJSON())).toBe(JSON.stringify(best));
   });
 });
 

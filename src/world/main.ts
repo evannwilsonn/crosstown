@@ -9,6 +9,7 @@ import { sampleWorld } from "./sample";
 import { WorldSim } from "./sim";
 import { Viewport } from "./viewport";
 import { drawNetwork } from "../visualizer";
+import { NeuralNetwork } from "../network";
 import { World, type CourseSave, type WorldJSON, type WorldPaint } from "./world";
 
 const WORLD_KEY = "sdc.world.v1";
@@ -276,7 +277,7 @@ function frame(nowMs: number): void {
 function drawBrain(now: number): void {
   const { width, height } = brainCanvas.getBoundingClientRect();
   const brain = sim.leader?.brain;
-  if (!brain) {
+  if (!(brain instanceof NeuralNetwork)) {
     brainCtx.clearRect(0, 0, width, height);
     brainCtx.fillStyle = color("--ink-muted");
     brainCtx.font = "600 14px Overpass, system-ui, sans-serif";

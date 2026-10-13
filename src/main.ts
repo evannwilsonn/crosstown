@@ -1,16 +1,20 @@
 import "./style.css";
-import { NeuralNetwork, type NetworkJSON } from "./network";
-import { Simulation, type Parent } from "./simulation";
-import { drawNetwork } from "./visualizer";
+import { Genome } from "./neat";
+import { LEVELS, Simulation, type SavedState } from "./simulation";
+import { drawGenome } from "./visualizer";
 
-// v2: fitness changed from raw distance to distance gained on traffic.
-const STORAGE_KEY = "sdc.parent.v2";
+// NEAT replaced the fixed network; the whole population and level are saved, not one brain.
+const STORAGE_KEY = "sdc.neat.v1";
+/** Max speed runs as many steps as fit in this much of each frame. */
+const MAX_BUDGET_MS = 14;
 const ROAD_WIDTH = 210;
 
 const $ = <T extends HTMLElement>(sel: string) => document.querySelector(sel) as T;
 
 const roadCanvas = $<HTMLCanvasElement>("#road");
 const brainCanvas = $<HTMLCanvasElement>("#brain");
+const chartCanvas = $<HTMLCanvasElement>("#chart");
+const chartCtx = chartCanvas.getContext("2d")!;
 const roadCtx = roadCanvas.getContext("2d")!;
 const brainCtx = brainCanvas.getContext("2d")!;
 
@@ -18,13 +22,12 @@ const ui = {
   generation: $("#stat-generation"),
   alive: $("#stat-alive"),
   run: $("#stat-run"),
-  best: $("#stat-best"),
+  level: $("#stat-level"),
   population: $<HTMLInputElement>("#population"),
   populationOut: $<HTMLOutputElement>("#population-out"),
   mutation: $<HTMLInputElement>("#mutation"),
   mutationOut: $<HTMLOutputElement>("#mutation-out"),
   speed: $<HTMLFieldSetElement>("#speed"),
-  layout: $<HTMLFieldSetElement>("#layout"),
   sensors: $<HTMLInputElement>("#sensors"),
   drive: $<HTMLButtonElement>("#drive"),
   next: $<HTMLButtonElement>("#next"),
@@ -47,30 +50,31 @@ const palette = {
   shoulder: color("--shoulder"),
 };
 
-/* Storage is a convenience: the page works when it is blocked. */
-function loadParent(): Parent | null {
+/* Storage is a convenience: the page works when it is blocked. Learning picks up where it left off. */
+function loadState(): SavedState | null {
   try {
     const raw = localStorage.getItem(STORAGE_KEY);
-    return raw ? (JSON.parse(raw) as Parent) : null;
+    const s = raw ? (JSON.parse(raw) as SavedState) : null;
+    return s?.neat?.inputs === 5 && Array.isArray(s.neat.genomes) && s.neat.genomes.length ? s : null;
   } catch {
     return null;
   }
 }
-function saveParent(p: Parent | null): void {
+function saveState(): void {
   try {
-    if (p) localStorage.setItem(STORAGE_KEY, JSON.stringify(p));
+    if (sim.generation > 1) localStorage.setItem(STORAGE_KEY, JSON.stringify(sim.toJSON()));
     else localStorage.removeItem(STORAGE_KEY);
   } catch {
     /* ignore */
   }
 }
 
-const sim = new Simulation(0, ROAD_WIDTH, {
-  population: Number(ui.population.value),
-  mutation: Number(ui.mutation.value),
-  seed: 2026,
-  layout: "course",
-}, loadParent());
+let sim: Simulation;
+try {
+  sim = new Simulation(0, ROAD_WIDTH, { population: Number(ui.population.value), mutation: Number(ui.mutation.value), seed: 2026 }, loadState());
+} catch {
+  sim = new Simulation(0, ROAD_WIDTH, { population: Number(ui.population.value), mutation: Number(ui.mutation.value), seed: 2026 });
+}
 
 let stepsPerFrame = 1;
 let viewW = 0;
@@ -88,9 +92,15 @@ function fitCanvas(canvas: HTMLCanvasElement, ctx: CanvasRenderingContext2D): [n
 function resize(): void {
   [viewW, viewH] = fitCanvas(roadCanvas, roadCtx);
   fitCanvas(brainCanvas, brainCtx);
+  fitCanvas(chartCanvas, chartCtx);
+  chartDrawn = -1;
 }
 new ResizeObserver(resize).observe(roadCanvas);
 new ResizeObserver(() => fitCanvas(brainCanvas, brainCtx)).observe(brainCanvas);
+new ResizeObserver(() => {
+  fitCanvas(chartCanvas, chartCtx);
+  chartDrawn = -1;
+}).observe(chartCanvas);
 
 
 function announce(msg: string): void {
@@ -129,17 +139,79 @@ function drawRoad(): void {
 function drawBrain(now: number): void {
   const brain = sim.leader.brain;
   const { width, height } = brainCanvas.getBoundingClientRect();
-  if (!brain) {
+  if (!(brain instanceof Genome)) {
     brainCtx.clearRect(0, 0, width, height);
     return;
   }
-  drawNetwork(brainCtx, brain, width, height, {
+  drawGenome(brainCtx, brain, width, height, {
     positive: palette.yellow,
     negative: palette.blue,
     node: palette.asphalt,
     nodeOn: palette.yellow,
     label: palette.white,
   }, -now / 50);
+}
+
+/**
+ * Learning curve: one bar per generation, the best car's lead on traffic. Bars alternate color
+ * by level, each level is labeled where it starts, and a dot marks generations whose best brain grew.
+ */
+let chartDrawn = -1;
+function drawChart(): void {
+  const rows = sim.history.slice(-90);
+  const key = sim.history.length * 1000 + rows.length;
+  if (chartDrawn === key) return;
+  chartDrawn = key;
+  const ctx = chartCtx;
+  const { width, height } = chartCanvas.getBoundingClientRect();
+  ctx.clearRect(0, 0, width, height);
+  const pad = { l: 2, r: 2, t: 16, b: 16 };
+  const w = width - pad.l - pad.r;
+  const h = height - pad.t - pad.b;
+  ctx.font = "600 10px Overpass, system-ui, sans-serif";
+  ctx.strokeStyle = palette.shoulder;
+  ctx.beginPath();
+  ctx.moveTo(pad.l, pad.t + h + 0.5);
+  ctx.lineTo(pad.l + w, pad.t + h + 0.5);
+  ctx.stroke();
+  ctx.fillStyle = palette.concrete;
+  ctx.textBaseline = "alphabetic";
+  if (!rows.length) {
+    ctx.fillText("Each finished generation adds a bar here.", pad.l, pad.t + h / 2);
+    return;
+  }
+  const topValue = Math.max(100, ...rows.map((r) => r.best));
+  const slot = w / Math.max(rows.length, 30);
+  let lastLabel = -Infinity;
+  rows.forEach((r, i) => {
+    const x = pad.l + i * slot;
+    const bh = (Math.max(0, r.best) / topValue) * h;
+    ctx.fillStyle = r.level % 2 ? palette.yellow : palette.green;
+    ctx.fillRect(x + 1, pad.t + h - bh, Math.max(1, slot - 2), bh);
+    if (r.grew) {
+      ctx.fillStyle = palette.white;
+      ctx.beginPath();
+      ctx.arc(x + slot / 2, pad.t + h - bh - 4, 2, 0, Math.PI * 2);
+      ctx.fill();
+    }
+    // Label where each level starts; quick level-ups share one label so they don't overlap.
+    if ((i === 0 || rows[i - 1].level !== r.level) && x - lastLabel > 22) {
+      ctx.fillStyle = palette.white;
+      ctx.fillText(`L${r.level}`, x + 1, pad.t - 4);
+      lastLabel = x;
+    }
+  });
+  ctx.fillStyle = palette.concrete;
+  ctx.fillText(`gen ${rows[0].generation}`, pad.l, height - 3);
+  const last = `gen ${rows[rows.length - 1].generation}`;
+  ctx.fillText(last, pad.l + w - ctx.measureText(last).width, height - 3);
+}
+
+function brainSummary(): string {
+  const g = sim.leader.brain instanceof Genome ? sim.leader.brain : null;
+  if (!g) return "";
+  const n = g.hiddenCount;
+  return `${n} hidden ${n === 1 ? "neuron" : "neurons"}, ${g.enabledCount} links, ${sim.neat.species.length || 1} species`;
 }
 
 let lastStats = 0;
@@ -149,26 +221,35 @@ function updateStats(now: number): void {
   const keys = sim.mode === "KEYS";
   ui.generation.textContent = keys ? "Manual" : String(sim.generation);
   ui.alive.textContent = keys ? "1" : `${sim.alive} of ${sim.cars.length}`;
-  ui.run.textContent = String(Math.max(sim.bestPassed, sim.passedBy(sim.leader)));
-  ui.best.textContent = sim.parent ? `${sim.parent.passed ?? 0} cars` : "None yet";
+  const goal = sim.levelSpec.goal;
+  const passed = Math.max(sim.bestPassed, sim.passedBy(sim.leader));
+  ui.run.textContent = goal ? `${passed} of ${goal}` : String(passed);
+  ui.level.textContent = `${sim.level}: ${sim.levelSpec.name}`;
+  ui.brainNote.textContent = brainSummary();
+}
+
+function describeGeneration(): string {
+  const s = sim.last;
+  if (!s) return "Generation 1: random brains with no hidden neurons, sensors wired straight to the controls.";
+  if (s.levelUp) {
+    const next = LEVELS[s.level];
+    return `Generation ${s.generation} passed ${s.passed} cars and cleared level ${s.level}. Level ${next.number}, ${next.name}: tighter, faster traffic${next.goal ? "" : " that never ends"}.`;
+  }
+  if (s.grew) return `Generation ${s.generation}'s best brain grew a neuron: ${s.neurons} hidden now. Passed ${s.passed} cars.`;
+  return `Generation ${s.generation}: best car passed ${s.passed} cars. ${s.species} species are competing.`;
 }
 
 function frame(now: number): void {
-  for (let i = 0; i < stepsPerFrame; i++) {
-    const cleared = sim.clearedCourse();
+  const t0 = performance.now();
+  for (let i = 0; i < stepsPerFrame && performance.now() - t0 < MAX_BUDGET_MS; i++) {
     if (sim.step()) {
-      saveParent(sim.parent);
-      if (cleared) announce(`Generation ${sim.generation - 1} cleared all seven cars. Try Endless traffic for a harder road.`);
-      else
-        announce(
-          sim.parent
-            ? `Generation ${sim.generation} is breeding from a brain that passed ${sim.parent.passed ?? 0} cars.`
-            : `Generation ${sim.generation} starts from random brains.`,
-        );
+      saveState();
+      announce(describeGeneration());
     }
   }
   drawRoad();
   drawBrain(now);
+  drawChart();
   updateStats(now);
   requestAnimationFrame(frame);
 }
@@ -178,28 +259,18 @@ ui.population.addEventListener("input", () => {
   ui.populationOut.value = ui.population.value;
 });
 ui.population.addEventListener("change", () => {
-  sim.settings.population = Number(ui.population.value);
-  sim.reset();
+  sim.setPopulation(Number(ui.population.value));
   announce(`Restarted generation ${sim.generation} with ${sim.settings.population} cars.`);
 });
 ui.mutation.addEventListener("input", () => {
   ui.mutationOut.value = `${Math.round(Number(ui.mutation.value) * 100)}%`;
   sim.settings.mutation = Number(ui.mutation.value);
-});
-
-ui.layout.addEventListener("change", (e) => {
-  sim.settings.layout = (e.target as HTMLInputElement).value as "course" | "endless";
-  sim.forget();
-  saveParent(null);
-  announce(
-    sim.settings.layout === "course"
-      ? "Course traffic: the seven cars from the video. Learning restarted."
-      : "Endless traffic: seeded rows that never end. Learning restarted.",
-  );
+  sim.applyMutation();
 });
 
 ui.speed.addEventListener("change", (e) => {
-  stepsPerFrame = Number((e.target as HTMLInputElement).value);
+  const v = (e.target as HTMLInputElement).value;
+  stepsPerFrame = v === "max" ? Infinity : Number(v);
 });
 
 ui.drive.addEventListener("click", () => {
@@ -215,30 +286,31 @@ ui.drive.addEventListener("click", () => {
 
 ui.next.addEventListener("click", () => {
   sim.nextGeneration();
-  saveParent(sim.parent);
-  announce(`Skipped to generation ${sim.generation}.`);
+  saveState();
+  announce(`Skipped ahead. ${describeGeneration()}`);
 });
 
 ui.forget.addEventListener("click", () => {
   sim.forget();
-  saveParent(null);
-  announce("Learning reset. Generation 1 starts from random brains.");
+  saveState();
+  announce("Learning reset: level 1, random brains with no hidden neurons.");
 });
 
 ui.download.addEventListener("click", async () => {
-  const brain: NetworkJSON | undefined = sim.parent?.brain ?? sim.leader.brain?.toJSON();
-  if (!brain) return;
+  const g = sim.neat.champion ?? (sim.leader.brain instanceof Genome ? sim.leader.brain : null);
+  if (!g) return;
+  const brain = g.toJSON();
   try {
     await navigator.clipboard.writeText(JSON.stringify(brain, null, 2));
     announce("Brain copied to the clipboard as JSON.");
   } catch {
-    announce("Your browser blocked clipboard access. Run sim.parent in the console to get the brain.");
+    announce("Your browser blocked clipboard access. Run sim.neat.champion in the console to get the brain.");
   }
 });
 
-// Keep a reference so tree-shaking leaves NeuralNetwork in the bundle for console experiments.
-(window as unknown as { sim: Simulation; NeuralNetwork: typeof NeuralNetwork }).sim = sim;
-(window as unknown as { NeuralNetwork: typeof NeuralNetwork }).NeuralNetwork = NeuralNetwork;
+// Exposed for console experiments.
+(window as unknown as { sim: Simulation }).sim = sim;
 
+announce(sim.last ? `Picked up where you left off. ${describeGeneration()}` : describeGeneration());
 resize();
 requestAnimationFrame(frame);

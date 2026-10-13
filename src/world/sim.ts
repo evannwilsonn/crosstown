@@ -114,7 +114,7 @@ export class WorldSim {
 
   nextGeneration(): void {
     const best = this.leader;
-    if (best?.brain && (!this.parent || best.progress >= this.parent.progress)) {
+    if (best?.brain instanceof NeuralNetwork && (!this.parent || best.progress >= this.parent.progress)) {
       this.parent = { brain: best.brain.toJSON(), progress: best.progress };
     }
     this.generation++;

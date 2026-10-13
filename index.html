@@ -18,7 +18,7 @@
       <aside class="rail">
         <header class="sign sign--title">
           <h1>Self-driving car</h1>
-          <p>Every car gets the same small neural network. After each run, the car that got furthest past the traffic is copied and mutated to breed the next generation.</p>
+          <p>Every car starts with the smallest possible brain: sensors wired straight to the controls. Each generation the best brains breed, and mutations can add neurons and connections, so the network grows as the traffic gets harder.</p>
         </header>
 
         <section class="sign sign--guide" aria-label="Progress">
@@ -26,19 +26,28 @@
             <div><dt>Generation</dt><dd id="stat-generation">1</dd></div>
             <div><dt>Still driving</dt><dd id="stat-alive">0</dd></div>
             <div><dt>Cars passed</dt><dd id="stat-run">0</dd></div>
-            <div><dt>Best so far</dt><dd id="stat-best">None yet</dd></div>
+            <div><dt>Level</dt><dd id="stat-level">1</dd></div>
           </dl>
+        </section>
+
+        <section class="panel" aria-labelledby="chart-title">
+          <div class="panel-head">
+            <h2 id="chart-title">Learning curve</h2>
+            <p class="legend">Lead on traffic</p>
+          </div>
+          <canvas id="chart" aria-label="Chart: how far ahead of traffic each generation's best car got, by level. Dots mark generations where the best brain grew."></canvas>
         </section>
 
         <section class="panel brain" aria-labelledby="brain-title">
           <div class="panel-head">
             <h2 id="brain-title">Leader's brain</h2>
-            <p id="brain-note" class="legend">
+            <p class="legend">
               <span class="swatch swatch--pos"></span>Excites
               <span class="swatch swatch--neg"></span>Inhibits
             </p>
           </div>
-          <canvas id="brain" aria-label="Neural network of the leading car. Five sensor inputs at the bottom, six hidden neurons, four outputs at the top: forward, left, right, reverse."></canvas>
+          <canvas id="brain" aria-label="The leading car's brain as it has grown: five sensor inputs at the bottom, four controls at the top (forward, left, right, reverse), and any hidden neurons evolution has added in between. Yellow links excite, blue inhibit."></canvas>
+          <p id="brain-note" class="help help--quiet"></p>
         </section>
 
         <section class="panel controls" aria-labelledby="controls-title">
@@ -54,17 +63,12 @@
             <input id="mutation" type="range" min="0" max="0.5" step="0.01" value="0.1" />
           </label>
 
-          <fieldset id="layout" class="segmented">
-            <legend>Traffic</legend>
-            <label><input type="radio" name="layout" value="course" checked /><span>Course</span></label>
-            <label><input type="radio" name="layout" value="endless" /><span>Endless</span></label>
-          </fieldset>
-
           <fieldset id="speed" class="segmented">
             <legend>Sim speed</legend>
             <label><input type="radio" name="speed" value="1" checked /><span>1×</span></label>
             <label><input type="radio" name="speed" value="3" /><span>3×</span></label>
             <label><input type="radio" name="speed" value="8" /><span>8×</span></label>
+            <label><input type="radio" name="speed" value="max" /><span>Max</span></label>
           </fieldset>
 
           <label class="toggle">

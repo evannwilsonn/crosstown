@@ -1,4 +1,5 @@
 import { Controls, type ControlType } from "./controls";
+import { Genome } from "./neat";
 import { NeuralNetwork } from "./network";
 import { Sensor } from "./sensor";
 import { polysIntersect, type Point } from "./utils";
@@ -14,7 +15,8 @@ export class Car {
   polygon: Point[] = [];
   controls: Controls;
   sensor?: Sensor;
-  brain?: NeuralNetwork;
+  /** A fixed-shape network (the course's, used in the world) or a NEAT genome that grows (the highway). */
+  brain?: NeuralNetwork | Genome;
 
   /** Best fitness reached: forward distance on the highway, distance from spawn in an open world. */
   progress = 0;
@@ -55,7 +57,9 @@ export class Car {
       this.sensor.update(borders, traffic);
       // The course keeps thinking after a crash, so the network view stays live.
       if (this.brain) {
-        const [forward, left, right, reverse] = NeuralNetwork.feedForward(this.sensor.inputs(), this.brain);
+        const inputs = this.sensor.inputs();
+        const [forward, left, right, reverse] =
+          this.brain instanceof Genome ? this.brain.activate(inputs) : NeuralNetwork.feedForward(inputs, this.brain);
         this.controls.forward = forward === 1;
         this.controls.left = left === 1;
         this.controls.right = right === 1;
