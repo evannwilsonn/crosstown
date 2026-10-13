@@ -15,7 +15,8 @@ import { World, type CourseSave, type WorldJSON, type WorldPaint } from "./world
 
 const WORLD_KEY = "sdc.world.v1";
 // v2: route following changed the brain to 9 inputs and 8 hidden neurons.
-const PARENT_KEY = "sdc.world.parent.v2";
+// v3: starts from random brains; the trained brain is opt-in.
+const PARENT_KEY = "sdc.world.parent.v3";
 /** Trained offline with scripts/train-world-robust.ts: follows its route, stops for stop signs and red lights. */
 const PRETRAINED = pretrained as Parent;
 /** Max speed runs as many steps as fit in this much of each frame. */
@@ -126,11 +127,11 @@ const viewport = new Viewport(canvas);
 function loadParent(): Parent | null {
   try {
     const raw = localStorage.getItem(PARENT_KEY);
-    if (raw === null) return PRETRAINED;
+    if (raw === null) return null;
     const p: unknown = JSON.parse(raw);
     return isParent(p, WORLD_COUNTS) ? p : null;
   } catch {
-    return PRETRAINED;
+    return null;
   }
 }
 const sim = new WorldSim(() => world, loadParent());

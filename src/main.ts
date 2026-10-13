@@ -4,8 +4,8 @@ import { Simulation, isParent, type Parent } from "./simulation";
 import pretrained from "./pretrained/highway.json";
 import { drawNetwork } from "./visualizer";
 
-// v3: lane assist changed the brain to 8 inputs and 8 hidden neurons.
-const STORAGE_KEY = "sdc.parent.v3";
+// v4: pages start from random brains; the trained brain is opt-in.
+const STORAGE_KEY = "sdc.parent.v4";
 /** A brain trained offline with scripts/train.ts that clears the course layout. */
 const PRETRAINED = pretrained as Parent;
 const ROAD_WIDTH = 210;
@@ -58,11 +58,11 @@ const palette = {
 function loadParent(): Parent | null {
   try {
     const raw = localStorage.getItem(STORAGE_KEY);
-    if (raw === null) return PRETRAINED;
+    if (raw === null) return null;
     const p: unknown = JSON.parse(raw);
     return isParent(p) ? p : null;
   } catch {
-    return PRETRAINED;
+    return null;
   }
 }
 function saveParent(p: Parent | null): void {
@@ -334,11 +334,9 @@ ui.download.addEventListener("click", async () => {
 (window as unknown as { NeuralNetwork: typeof NeuralNetwork }).NeuralNetwork = NeuralNetwork;
 
 announce(
-  sim.parent === PRETRAINED
-    ? "Loaded a brain trained offline. Press Reset learning to watch cars learn from scratch."
-    : sim.parent
+  sim.parent
       ? "Picked up from the brain saved in this browser."
-      : "Generation 1 starts from random brains. Give it a few runs.",
+      : "Generation 1 starts from random brains. Try Max speed to watch them learn, or Load trained brain to see the finished result.",
 );
 resize();
 requestAnimationFrame(frame);
