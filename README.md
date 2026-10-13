@@ -116,7 +116,7 @@ After that the cycle repeats, and two towns in a row never look alike. Buildings
 
 Every generated town is checked to be connected both ways, one-way streets included. Traffic lights ramp in town by town. Red lights are walls for the sensors; yellow is not. Yellow lights crushed cars that were already in the junction, so this is a deliberate difference from the course. The lights run on the simulation's clock, so they keep pace at Max speed.
 
-`npx tsx scripts/train-world.ts [generations] [cars] [mutation] [start level]` runs the world headless, swapping maps as levels clear. In test runs, populations cleared level 2 in under 40 generations. Later levels take longer: one run cleared level 4 after about 126 generations.
+`npx tsx scripts/train-world.ts [generations] [cars] [mutation] [start level]` runs the world headless, swapping towns as levels clear. In test runs, populations cleared the sample town's five levels in roughly 15 to 60 generations, and the first downtown levels soon after. The first detour level is the first real wall. Before the GPS fixes above, three populations sat on it for 350+ generations. After them, one run cleared it in about 60 generations and another in about 10, then the pedestrian level within a few more.
 
 ### Your own maps
 
