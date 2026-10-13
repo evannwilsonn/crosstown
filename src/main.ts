@@ -1,6 +1,6 @@
 import "./style.css";
 import { Genome } from "./neat";
-import { CLEARS_TO_PASS, INPUTS, LEVELS, Simulation, type SavedState } from "./simulation";
+import { CLEARS_TO_PASS, INPUTS, levelSpec, Simulation, type SavedState } from "./simulation";
 import { drawGenome } from "./visualizer";
 import { drawLearningCurve } from "./chart";
 
@@ -186,7 +186,7 @@ function updateStats(now: number): void {
   const goal = sim.levelSpec.goal;
   const passed = Math.max(sim.bestPassed, sim.passedBy(sim.leader));
   ui.run.textContent = goal ? `${passed} of ${goal}` : String(passed);
-  ui.level.textContent = `${sim.level}: ${sim.levelSpec.name}${sim.levelSpec.goal ? ` (${sim.clears}/${CLEARS_TO_PASS})` : ""}`;
+  ui.level.textContent = `${sim.level}: ${sim.levelSpec.name} (${sim.clears}/${CLEARS_TO_PASS})`;
   ui.brainNote.textContent = brainSummary();
 }
 
@@ -194,8 +194,9 @@ function describeGeneration(): string {
   const s = sim.last;
   if (!s) return "Generation 1: random brains with no hidden neurons, sensors wired straight to the controls.";
   if (s.levelUp) {
-    const next = LEVELS[s.level];
-    return `Generation ${s.generation} passed ${s.passed} cars and cleared level ${s.level}. Level ${next.number}, ${next.name}: tighter, faster traffic${next.goal ? "" : " that never ends"}.`;
+    const next = levelSpec(s.level + 1);
+    const road = next.road !== levelSpec(s.level).road ? " New road." : "";
+    return `Generation ${s.generation} cleared level ${s.level}.${road} Level ${next.number}: ${next.name}. Pass ${next.goal} cars on ${CLEARS_TO_PASS} different layouts.`;
   }
   if (s.cleared) return `Generation ${s.generation} passed ${s.passed} cars and cleared this layout: ${s.clears} of ${CLEARS_TO_PASS} needed for level ${s.level}.`;
   if (s.grew) return `Generation ${s.generation}'s best brain grew a neuron: ${s.neurons} hidden now. Passed ${s.passed} cars.`;

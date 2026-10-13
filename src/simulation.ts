@@ -22,9 +22,11 @@ export interface Parent {
 }
 
 /**
- * A stage of the highway. Level 1 is the course's seven cars; after that traffic never ends,
- * and each level packs the rows closer and runs them faster. The last level has no goal: the
- * cars just keep going as far as they can.
+ * A stage of the highway. Levels never run out. Level 1 is seven cars in the course's pattern;
+ * after that traffic never ends and gets harder level by level: rows closer together and faster
+ * up to the densest traffic that stays passable, then lanes moving at different speeds, then
+ * drivers who change lanes, with more cars to pass each time. Every three levels the road
+ * itself changes.
  */
 export interface Level {
   number: number;
@@ -32,19 +34,51 @@ export interface Level {
   layout: TrafficLayout;
   rowGap: number;
   trafficSpeed: number;
-  /** Cars the leader must pass to unlock the next level; null on the last level. */
-  goal: number | null;
+  laneSpread: number;
+  changeRate: number;
+  /** Cars the leader must pass to clear the level. */
+  goal: number;
+  /** Which road the level is on: a new one every LEVELS_PER_ROAD levels. */
+  road: number;
 }
 
-export const LEVELS: Level[] = [
-  { number: 1, name: "Seven cars", layout: "seven", rowGap: 210, trafficSpeed: 2, goal: 7 },
-  { number: 2, name: "Open road", layout: "endless", rowGap: 230, trafficSpeed: 2, goal: 15 },
-  { number: 3, name: "Light traffic", layout: "endless", rowGap: 200, trafficSpeed: 2.1, goal: 15 },
-  { number: 4, name: "Steady traffic", layout: "endless", rowGap: 180, trafficSpeed: 2.2, goal: 20 },
-  { number: 5, name: "Heavy traffic", layout: "endless", rowGap: 165, trafficSpeed: 2.3, goal: 20 },
-  { number: 6, name: "Congestion", layout: "endless", rowGap: 150, trafficSpeed: 2.4, goal: 25 },
-  { number: 7, name: "Rush hour", layout: "endless", rowGap: 140, trafficSpeed: 2.5, goal: null },
-];
+export const LEVELS_PER_ROAD = 3;
+/** Densest rows that stay passable, and the fastest traffic. */
+const MIN_ROW_GAP = 150;
+const MAX_TRAFFIC_SPEED = 2.5;
+/** Lanes start running at different speeds from this level, and drivers change lanes from this one. */
+const LANE_SPEEDS_FROM = 8;
+const LANE_CHANGES_FROM = 11;
+const MAX_GOAL = 50;
+
+const TRAFFIC_NAMES = ["Open road", "Light traffic", "Steady traffic", "Heavy traffic", "Congestion", "Rush hour"];
+
+/** The level's settings, for any level number. */
+export function levelSpec(n: number): Level {
+  const road = Math.floor((n - 1) / LEVELS_PER_ROAD);
+  if (n <= 1) {
+    return { number: 1, name: "Seven cars", layout: "seven", rowGap: 210, trafficSpeed: 2, laneSpread: 0, changeRate: 0, goal: 7, road };
+  }
+  const k = n - 2;
+  const laneSpread = n >= LANE_SPEEDS_FROM ? Math.min(0.4, 0.1 * (n - LANE_SPEEDS_FROM + 1)) : 0;
+  const changeRate = n >= LANE_CHANGES_FROM ? Math.min(0.004, 0.001 * (n - LANE_CHANGES_FROM + 1)) : 0;
+  const extras = [laneSpread ? "lanes at different speeds" : "", changeRate ? "drivers changing lanes" : ""].filter(Boolean);
+  const base = TRAFFIC_NAMES[Math.min(k, TRAFFIC_NAMES.length - 1)];
+  return {
+    number: n,
+    name: extras.length ? `${base}, ${extras.join(" and ")}` : base,
+    layout: "endless",
+    rowGap: Math.max(MIN_ROW_GAP, 230 - 15 * k),
+    trafficSpeed: Math.min(MAX_TRAFFIC_SPEED, 2 + 0.1 * k),
+    laneSpread,
+    changeRate,
+    goal: Math.min(MAX_GOAL, 15 + 2 * k),
+    road,
+  };
+}
+
+/** The first levels, for reference and tests. */
+export const LEVELS: Level[] = Array.from({ length: 12 }, (_, i) => levelSpec(i + 1));
 
 /** What happened in the generation that just ended, for the status line and the chart. */
 export interface GenerationSummary {
@@ -91,8 +125,8 @@ const OUTPUTS = 4;
  */
 export const CLEARS_TO_PASS = 3;
 const LEADER_PATIENCE = 420; // frames the leader may go without gaining ground before the generation ends
-/** On the last level a perfect driver never stops, so its generations end after two minutes. */
-const LAST_LEVEL_FRAMES = 60 * 120;
+/** Safety limit on a generation's length, in frames. */
+const MAX_GENERATION_FRAMES = 60 * 240;
 
 export class Simulation {
   road: Road;
@@ -126,7 +160,7 @@ export class Simulation {
       this.neat = Neat.fromJSON(saved.neat);
       if (saved.seed !== undefined) settings.seed = saved.seed;
       this.neat.resize(settings.population);
-      this.level = Math.min(LEVELS.length, Math.max(1, saved.level));
+      this.level = Math.max(1, saved.level);
       this.generation = saved.generation;
       this.clears = saved.clears ?? 0;
       this.history = saved.history ?? [];
@@ -139,7 +173,7 @@ export class Simulation {
   }
 
   get levelSpec(): Level {
-    return LEVELS[this.level - 1];
+    return levelSpec(this.level);
   }
 
   /** Builds a fresh generation: one car per genome, on this level's traffic. */
@@ -151,6 +185,8 @@ export class Simulation {
     this.course = new TrafficCourse(this.road, this.trafficSeed(), spec.layout, {
       rowGap: spec.rowGap,
       speed: spec.trafficSpeed,
+      laneSpread: spec.laneSpread,
+      changeRate: spec.changeRate,
     });
     const x = this.road.getLaneCenter(1);
     const withSensors = (car: Car) => {
@@ -220,7 +256,7 @@ export class Simulation {
     this.frames++;
     this.course.extend(this.leader.y);
     this.course.update();
-    this.trafficTravel += this.course.cars[0]?.speed ?? 0;
+    this.trafficTravel += this.course.speed;
     for (const car of this.cars) {
       car.update(this.road.borders, this.course.near(car.y), [car.speed / car.maxSpeed]);
       const gained = car.progress - this.trafficTravel;
@@ -239,8 +275,8 @@ export class Simulation {
     }
 
     const goal = this.levelSpec.goal;
-    this.goalReached = goal !== null && !this.leader.damaged && this.passedBy(this.leader) >= goal;
-    const timeUp = goal === null && this.frames > LAST_LEVEL_FRAMES;
+    this.goalReached = !this.leader.damaged && this.passedBy(this.leader) >= goal;
+    const timeUp = this.frames > MAX_GENERATION_FRAMES;
     if (this.alive === 0 || this.framesSinceLeaderGain > LEADER_PATIENCE || this.goalReached || timeUp) {
       this.nextGeneration();
       return true;
@@ -255,7 +291,7 @@ export class Simulation {
     this.neat.evolve(this.cars.map((c) => this.score(c)));
     const champ = this.neat.champion!;
     if (this.goalReached) this.clears++;
-    const levelUp = this.clears >= CLEARS_TO_PASS && this.level < LEVELS.length;
+    const levelUp = this.clears >= CLEARS_TO_PASS;
     this.last = {
       generation: this.generation,
       level: this.level,

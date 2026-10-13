@@ -1,7 +1,7 @@
 import { describe, expect, it } from "vitest";
 import { getIntersection, mulberry32, polysIntersect } from "../src/utils";
 import { NeuralNetwork } from "../src/network";
-import { LEVELS, Simulation } from "../src/simulation";
+import { levelSpec, Simulation } from "../src/simulation";
 import { Genome, Innovations, Neat } from "../src/neat";
 
 describe("geometry", () => {
@@ -118,12 +118,41 @@ describe("simulation", () => {
     expect(sim.course.layout).toBe("endless");
   });
 
-  it("levels get denser and faster, and the last one never ends", () => {
-    for (let i = 2; i < LEVELS.length; i++) {
-      expect(LEVELS[i].rowGap).toBeLessThan(LEVELS[i - 1].rowGap);
-      expect(LEVELS[i].trafficSpeed).toBeGreaterThanOrEqual(LEVELS[i - 1].trafficSpeed);
+  it("levels never run out: traffic tightens to a passable limit, then new behaviors arrive", () => {
+    for (let n = 3; n <= 60; n++) {
+      const a = levelSpec(n - 1);
+      const b = levelSpec(n);
+      expect(b.rowGap).toBeLessThanOrEqual(a.rowGap);
+      expect(b.rowGap).toBeGreaterThanOrEqual(150); // never denser than the passable limit
+      expect(b.trafficSpeed).toBeGreaterThanOrEqual(a.trafficSpeed);
+      expect(b.goal).toBeGreaterThanOrEqual(a.goal);
     }
-    expect(LEVELS[LEVELS.length - 1].goal).toBeNull();
+    expect(levelSpec(7).laneSpread).toBe(0);
+    expect(levelSpec(8).laneSpread).toBeGreaterThan(0);
+    expect(levelSpec(10).changeRate).toBe(0);
+    expect(levelSpec(11).changeRate).toBeGreaterThan(0);
+    expect(levelSpec(1).road).toBe(0);
+    expect(levelSpec(4).road).toBe(1); // a new road every three levels
+  });
+
+  it("lane-changing traffic moves to the next lane and takes its speed", async () => {
+    const { Road } = await import("../src/road");
+    const { TrafficCourse } = await import("../src/traffic");
+    const road = new Road(0, 210);
+    const t = new TrafficCourse(road, 5, "endless", { rowGap: 230, speed: 2, laneSpread: 0.3, changeRate: 0.05 });
+    t.extend(0, 2000);
+    const startX = t.cars.map((c) => c.x);
+    for (let i = 0; i < 400; i++) t.update();
+    const moved = t.cars.filter((c, i) => Math.abs(c.x - startX[i]) > 60);
+    expect(moved.length).toBeGreaterThan(0);
+    // Cars that have finished their change sit on a lane center and cruise at that lane's speed.
+    const settled = moved.filter((c) => c.angle === 0);
+    expect(settled.length).toBeGreaterThan(0);
+    for (const c of settled) {
+      const lane = [0, 1, 2].find((l) => Math.abs(c.x - road.getLaneCenter(l)) < 0.01)!;
+      expect(lane).toBeDefined();
+      expect(c.maxSpeed).toBeCloseTo(t.laneSpeed(lane));
+    }
   });
 
   it("saves and restores the population, level and generation", () => {
