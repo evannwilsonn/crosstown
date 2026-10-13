@@ -15,7 +15,7 @@ while (sim.generation <= gens) {
   if (sim.generation === g) sim.nextGeneration();
   const s = sim.last!;
   console.log(
-    `gen ${g}: level ${s.level}${s.levelUp ? " CLEARED" : ""}, passed ${s.passed}, ahead ${Math.round(s.best / 10)} m, ` +
+    `gen ${g}: level ${s.level}${s.levelUp ? " CLEARED" : s.cleared ? ` clear ${s.clears}/3` : ""}, passed ${s.passed}, ahead ${Math.round(s.best / 10)} m, ` +
       `brain ${s.neurons} hidden / ${s.connections} links, ${s.species} species${s.grew ? ", GREW" : ""}, ${frames} frames, ${((Date.now() - t0) / 1000).toFixed(0)} s`,
   );
 }

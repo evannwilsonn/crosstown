@@ -2,7 +2,8 @@ import { Car } from "./car";
 import type { Road } from "./road";
 import { mulberry32 } from "./utils";
 
-export type TrafficLayout = "course" | "endless";
+/** "course": the video's exact seven cars. "seven": seven cars in the course's pattern, placed at random. "endless": rows forever. */
+export type TrafficLayout = "course" | "seven" | "endless";
 
 /** Spacing between rows and traffic speed; levels tighten both. */
 export interface TrafficOptions {
@@ -31,6 +32,25 @@ export class TrafficCourse {
     this.speed = options.speed ?? TRAFFIC_SPEED;
     this.rng = mulberry32(seed);
     if (layout === "course") this.placeCourseLayout();
+    if (layout === "seven") this.placeRandomSeven();
+  }
+
+  /**
+   * Seven cars at the course's difficulty in a new arrangement: one car in a random lane, then
+   * three rows that each block two lanes, every 200 px, like the video's layout.
+   */
+  private placeRandomSeven(): void {
+    const lanes = [...Array(this.road.laneCount).keys()];
+    const add = (lane: number, y: number) => {
+      const car = new Car(this.road.getLaneCenter(lane), y, 30, 50, "DUMMY", this.speed);
+      car.color = `hsl(${290 + this.rng() * 260}, 100%, 60%)`;
+      this.cars.push(car);
+    };
+    add(lanes[Math.floor(this.rng() * lanes.length)], -100);
+    for (const y of [-300, -500, -700]) {
+      const gap = lanes[Math.floor(this.rng() * lanes.length)];
+      for (const lane of lanes) if (lane !== gap) add(lane, y);
+    }
   }
 
   /** The seven cars from the course video (main.js), in the same lanes and rows. */
@@ -55,7 +75,7 @@ export class TrafficCourse {
    * a weave no car can make, and training stalls at that spot forever.
    */
   extend(leaderY: number, lookahead = 1400): void {
-    if (this.layout === "course") return;
+    if (this.layout !== "endless") return;
     while (this.nextRowY > leaderY - lookahead) {
       const lanes = [...Array(this.road.laneCount).keys()];
       let blocked: number[];

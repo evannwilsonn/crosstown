@@ -103,14 +103,17 @@ describe("simulation", () => {
 
   it("unlocks the next level when the leader reaches the goal", () => {
     const sim = new Simulation(0, 210, { population: 1, mutation: 0, seed: 1 });
-    const car = sim.cars[0];
-    car.brain = undefined;
-    // Teleport past the seven course cars: reaching the goal ends the generation and levels up.
-    car.y = -2000;
-    let ended = false;
-    for (let i = 0; i < 5 && !ended; i++) ended = sim.step();
-    expect(ended).toBe(true);
-    expect(sim.last!.levelUp).toBe(true);
+    // A level needs its goal on three different layouts.
+    for (let clear = 1; clear <= 3; clear++) {
+      const c = sim.cars[0];
+      c.brain = undefined;
+      c.y = -2000;
+      let ended = false;
+      for (let i = 0; i < 5 && !ended; i++) ended = sim.step();
+      expect(ended).toBe(true);
+      expect(sim.last!.cleared).toBe(true);
+      expect(sim.last!.levelUp).toBe(clear === 3);
+    }
     expect(sim.level).toBe(2);
     expect(sim.course.layout).toBe("endless");
   });

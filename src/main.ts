@@ -1,6 +1,6 @@
 import "./style.css";
 import { Genome } from "./neat";
-import { INPUTS, LEVELS, Simulation, type SavedState } from "./simulation";
+import { CLEARS_TO_PASS, INPUTS, LEVELS, Simulation, type SavedState } from "./simulation";
 import { drawGenome } from "./visualizer";
 import { drawLearningCurve } from "./chart";
 
@@ -74,9 +74,9 @@ function saveState(): void {
 
 let sim: Simulation;
 try {
-  sim = new Simulation(0, ROAD_WIDTH, { population: Number(ui.population.value), mutation: Number(ui.mutation.value), seed: 2026 }, loadState());
+  sim = new Simulation(0, ROAD_WIDTH, { population: Number(ui.population.value), mutation: Number(ui.mutation.value), seed: (Math.random() * 2 ** 32) >>> 0 }, loadState());
 } catch {
-  sim = new Simulation(0, ROAD_WIDTH, { population: Number(ui.population.value), mutation: Number(ui.mutation.value), seed: 2026 });
+  sim = new Simulation(0, ROAD_WIDTH, { population: Number(ui.population.value), mutation: Number(ui.mutation.value), seed: (Math.random() * 2 ** 32) >>> 0 });
 }
 
 let stepsPerFrame = 1;
@@ -186,7 +186,7 @@ function updateStats(now: number): void {
   const goal = sim.levelSpec.goal;
   const passed = Math.max(sim.bestPassed, sim.passedBy(sim.leader));
   ui.run.textContent = goal ? `${passed} of ${goal}` : String(passed);
-  ui.level.textContent = `${sim.level}: ${sim.levelSpec.name}`;
+  ui.level.textContent = `${sim.level}: ${sim.levelSpec.name}${sim.levelSpec.goal ? ` (${sim.clears}/${CLEARS_TO_PASS})` : ""}`;
   ui.brainNote.textContent = brainSummary();
 }
 
@@ -197,6 +197,7 @@ function describeGeneration(): string {
     const next = LEVELS[s.level];
     return `Generation ${s.generation} passed ${s.passed} cars and cleared level ${s.level}. Level ${next.number}, ${next.name}: tighter, faster traffic${next.goal ? "" : " that never ends"}.`;
   }
+  if (s.cleared) return `Generation ${s.generation} passed ${s.passed} cars and cleared this layout: ${s.clears} of ${CLEARS_TO_PASS} needed for level ${s.level}.`;
   if (s.grew) return `Generation ${s.generation}'s best brain grew a neuron: ${s.neurons} hidden now. Passed ${s.passed} cars.`;
   return `Generation ${s.generation}: best car passed ${s.passed} cars. ${s.species} species are competing.`;
 }

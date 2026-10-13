@@ -37,7 +37,7 @@ export interface Level {
 }
 
 export const LEVELS: Level[] = [
-  { number: 1, name: "The course", layout: "course", rowGap: 210, trafficSpeed: 2, goal: 7 },
+  { number: 1, name: "Seven cars", layout: "seven", rowGap: 210, trafficSpeed: 2, goal: 7 },
   { number: 2, name: "Open road", layout: "endless", rowGap: 230, trafficSpeed: 2, goal: 15 },
   { number: 3, name: "Light traffic", layout: "endless", rowGap: 200, trafficSpeed: 2.1, goal: 15 },
   { number: 4, name: "Steady traffic", layout: "endless", rowGap: 180, trafficSpeed: 2.2, goal: 20 },
@@ -54,6 +54,10 @@ export interface GenerationSummary {
   best: number;
   passed: number;
   levelUp: boolean;
+  /** True when this generation reached the level's goal (one of the clears needed to pass). */
+  cleared: boolean;
+  /** Clears on this level so far, out of CLEARS_TO_PASS. */
+  clears: number;
   /** Hidden neurons and live connections in the generation's best brain. */
   neurons: number;
   connections: number;
@@ -63,9 +67,12 @@ export interface GenerationSummary {
 }
 
 export interface SavedState {
+  /** This session's traffic seed. */
+  seed?: number;
   neat: NeatJSON;
   level: number;
   generation: number;
+  clears?: number;
   history?: GenerationSummary[];
 }
 
@@ -78,6 +85,11 @@ export const RAYS = 7;
 export const RAY_SPREAD = Math.PI;
 export const INPUTS = RAYS + 1;
 const OUTPUTS = 4;
+/**
+ * Traffic is new every generation, so one generation can get an easy layout. A level only counts
+ * as passed once its goal has been reached on this many different layouts.
+ */
+export const CLEARS_TO_PASS = 3;
 const LEADER_PATIENCE = 420; // frames the leader may go without gaining ground before the generation ends
 /** On the last level a perfect driver never stops, so its generations end after two minutes. */
 const LAST_LEVEL_FRAMES = 60 * 120;
@@ -89,6 +101,8 @@ export class Simulation {
   leader!: Car;
   generation = 1;
   level = 1;
+  /** Generations on this level that reached its goal; CLEARS_TO_PASS of them pass the level. */
+  clears = 0;
   mode: DriveMode = "AI";
   neat: Neat;
   history: GenerationSummary[] = [];
@@ -110,9 +124,11 @@ export class Simulation {
     this.road = new Road(roadX, roadWidth, 3);
     if (saved) {
       this.neat = Neat.fromJSON(saved.neat);
+      if (saved.seed !== undefined) settings.seed = saved.seed;
       this.neat.resize(settings.population);
       this.level = Math.min(LEVELS.length, Math.max(1, saved.level));
       this.generation = saved.generation;
+      this.clears = saved.clears ?? 0;
       this.history = saved.history ?? [];
       this.last = this.history[this.history.length - 1] ?? null;
     } else {
@@ -130,8 +146,9 @@ export class Simulation {
   reset(): void {
     this.cars.forEach((c) => c.dispose());
     const spec = this.levelSpec;
-    // Each level has its own seeded traffic, replayed every generation so cars compare fairly.
-    this.course = new TrafficCourse(this.road, this.settings.seed + this.level - 1, spec.layout, {
+    // New traffic every generation, so brains learn to read the road instead of memorizing one
+    // layout. Every car in a generation drives the same traffic, so they still compare fairly.
+    this.course = new TrafficCourse(this.road, this.trafficSeed(), spec.layout, {
       rowGap: spec.rowGap,
       speed: spec.trafficSpeed,
     });
@@ -157,6 +174,11 @@ export class Simulation {
     this.scores = new Map(this.cars.map((c) => [c, 0]));
     this.leaderPassed = 0;
     this.goalReached = false;
+  }
+
+  /** Seed for this generation's traffic: depends on the session, the level and the generation. */
+  trafficSeed(): number {
+    return (Math.imul(this.settings.seed ^ (this.level * 0x9e3779b1), 2654435761) + this.generation * 7919) >>> 0;
   }
 
   /**
@@ -232,13 +254,16 @@ export class Simulation {
     const before = this.neat.champion?.hiddenCount ?? 0;
     this.neat.evolve(this.cars.map((c) => this.score(c)));
     const champ = this.neat.champion!;
-    const levelUp = this.goalReached && this.level < LEVELS.length;
+    if (this.goalReached) this.clears++;
+    const levelUp = this.clears >= CLEARS_TO_PASS && this.level < LEVELS.length;
     this.last = {
       generation: this.generation,
       level: this.level,
       best: this.score(this.leader),
       passed: Math.max(this.leaderPassed, this.passedBy(this.leader)),
       levelUp,
+      cleared: this.goalReached,
+      clears: this.clears,
       neurons: champ.hiddenCount,
       connections: champ.enabledCount,
       species: this.neat.species.length,
@@ -246,7 +271,10 @@ export class Simulation {
     };
     this.history.push(this.last);
     if (this.history.length > 300) this.history.shift();
-    if (levelUp) this.level++;
+    if (levelUp) {
+      this.level++;
+      this.clears = 0;
+    }
     this.generation++;
     this.reset();
   }
@@ -262,12 +290,13 @@ export class Simulation {
     this.applyMutation();
     this.generation = 1;
     this.level = 1;
+    this.clears = 0;
     this.history = [];
     this.last = null;
     this.reset();
   }
 
   toJSON(): SavedState {
-    return { neat: this.neat.toJSON(), level: this.level, generation: this.generation, history: this.history.slice(-120) };
+    return { seed: this.settings.seed, neat: this.neat.toJSON(), level: this.level, generation: this.generation, clears: this.clears, history: this.history.slice(-120) };
   }
 }
