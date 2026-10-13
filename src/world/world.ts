@@ -8,6 +8,10 @@ import { createMarking, Light, markingFromJSON, type Marking, type MarkingJSON, 
 export interface CourseSave {
   graph: { points: Point[]; segments: { p1: Point; p2: Point }[] };
   roadWidth?: number;
+  roadRoundness?: number;
+  buildingWidth?: number;
+  buildingMinLength?: number;
+  spacing?: number;
   envelopes?: { skeleton: { p1: Point; p2: Point }; poly: { points: Point[] } }[];
   roadBorders?: { p1: Point; p2: Point }[];
   buildings?: { base: { points: Point[] }; height?: number }[];
@@ -46,6 +50,8 @@ export const SCENERY_LIMIT = 260;
 export interface WorldJSON {
   graph: GraphJSON;
   markings: MarkingJSON[];
+  /** The course keeps the viewport with the world so a reload opens where you left off. */
+  view?: { zoom: number; center: Point };
 }
 
 export interface WorldPaint extends Paint {
@@ -77,7 +83,14 @@ export class World {
    * so large real-city maps open instantly.
    */
   static fromCourseSave(info: CourseSave, settings = DEFAULT_SETTINGS): World {
-    const world = new World(Graph.fromJSON(info.graph), { ...settings, roadWidth: info.roadWidth ?? settings.roadWidth });
+    const world = new World(Graph.fromJSON(info.graph), {
+      roadWidth: info.roadWidth ?? settings.roadWidth,
+      roadRoundness: info.roadRoundness ?? settings.roadRoundness,
+      buildingWidth: info.buildingWidth ?? settings.buildingWidth,
+      buildingMinLength: info.buildingMinLength ?? settings.buildingMinLength,
+      spacing: info.spacing ?? settings.spacing,
+      treeSize: info.treeSize ?? settings.treeSize,
+    });
     const pt = (p: Point) => ({ x: p.x, y: p.y });
     if (info.envelopes && info.roadBorders) {
       world.envelopes = info.envelopes.map((e) => {
@@ -273,10 +286,17 @@ export class World {
       ctx.stroke();
     }
 
+    // Course order: markings go under the center line and road edges.
+    for (const m of this.markings) {
+      if (m.type === "start" && !showStart) continue;
+      if (near(m.center, 60)) m.draw(ctx, paint);
+    }
+
     ctx.setLineDash([22, 18]);
     ctx.strokeStyle = paint.yellow;
     ctx.lineWidth = 3;
     for (const s of this.graph.segments) {
+      if (s.oneWay) continue; // one-way streets carry no center line
       ctx.beginPath();
       ctx.moveTo(s.p1.x, s.p1.y);
       ctx.lineTo(s.p2.x, s.p2.y);
@@ -294,11 +314,6 @@ export class World {
     }
     ctx.stroke();
     ctx.lineCap = "butt";
-
-    for (const m of this.markings) {
-      if (m.type === "start" && !showStart) continue;
-      if (near(m.center, 60)) m.draw(ctx, paint);
-    }
   }
 
   /** Buildings and trees, farthest first, drawn after cars so they occlude them. */

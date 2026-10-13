@@ -26,7 +26,9 @@ export class TrafficCourse {
       for (let i = 0; i < blocked; i++) {
         const lane = lanes.splice(Math.floor(this.rng() * lanes.length), 1)[0];
         const jitter = (this.rng() - 0.5) * 60;
-        this.cars.push(new Car(this.road.getLaneCenter(lane), this.nextRowY + jitter, 30, 50, "DUMMY", 2));
+        const car = new Car(this.road.getLaneCenter(lane), this.nextRowY + jitter, 30, 50, "DUMMY", 2);
+        car.color = `hsl(${290 + this.rng() * 260}, 100%, 60%)`; // the course's getRandomColor, seeded
+        this.cars.push(car);
       }
       this.nextRowY -= ROW_GAP;
     }

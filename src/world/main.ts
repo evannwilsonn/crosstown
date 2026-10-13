@@ -98,6 +98,8 @@ function save(key: string, value: unknown): void {
   }
 }
 
+const savedView = load<WorldJSON>(WORLD_KEY)?.view;
+
 function initialWorld(): World {
   const saved = load<WorldJSON>(WORLD_KEY);
   if (saved?.graph) {
@@ -167,12 +169,16 @@ function regenerate(now: number): void {
   }
   if (world.itemsVersion !== v && now - lastChange > ITEM_DELAY_MS && sim.mode === "off") {
     world.generateItems();
-    save(WORLD_KEY, world.toJSON());
+    saveWorld();
   }
   if (world.markings.length !== markingCount) {
     markingCount = world.markings.length;
-    save(WORLD_KEY, world.toJSON());
+    saveWorld();
   }
+}
+
+function saveWorld(): void {
+  save(WORLD_KEY, { ...world.toJSON(), view: { zoom: viewport.zoom, center: viewport.center } });
 }
 
 function replaceWorld(next: World, msg: string, view?: { zoom: number; center: { x: number; y: number } }): void {
@@ -187,7 +193,7 @@ function replaceWorld(next: World, msg: string, view?: { zoom: number; center: {
     viewport.zoom = view.zoom;
     viewport.center = view.center;
   } else viewport.fit(world.graph.points);
-  save(WORLD_KEY, world.toJSON());
+  saveWorld();
   setTool((ui.tools.querySelector("input:checked") as HTMLInputElement).value);
   announce(msg);
 }
@@ -234,15 +240,18 @@ function frame(nowMs: number): void {
   world.draw(ctx, viewPoint, radius, paint, sim.mode === "off");
 
   ctx.globalAlpha = 0.2;
-  for (const car of sim.cars) if (car !== sim.leader && !car.damaged) car.draw(ctx, paint.white);
+  for (const car of sim.cars) if (car !== sim.leader) car.draw(ctx, car.damaged ? paint.items.wallEdge : paint.white);
   ctx.globalAlpha = 1;
   if (sim.leader) {
     const crashed = sim.leader.damaged;
-    sim.leader.draw(ctx, crashed ? paint.orange : paint.yellow, ui.sensors.checked ? paint.yellow : undefined);
+    sim.leader.draw(ctx, crashed ? paint.items.wallEdge : paint.yellow, ui.sensors.checked ? paint.yellow : undefined);
   }
 
   world.drawItems(ctx, viewPoint, radius, paint.items);
+  // Course 2:49: editors draw at 30% so the roads stay the focus.
+  ctx.globalAlpha = 0.3;
   editor?.draw(ctx, paint);
+  ctx.globalAlpha = 1;
   ctx.restore();
 
   drawMinimap(
@@ -251,7 +260,7 @@ function frame(nowMs: number): void {
     { road: paint.white, car: paint.yellow, view: paint.yellow },
   );
 
-  drawBrain();
+  drawBrain(nowMs);
 
   if (nowMs - lastStats > 150) {
     lastStats = nowMs;
@@ -264,7 +273,7 @@ function frame(nowMs: number): void {
   requestAnimationFrame(frame);
 }
 
-function drawBrain(): void {
+function drawBrain(now: number): void {
   const { width, height } = brainCanvas.getBoundingClientRect();
   const brain = sim.leader?.brain;
   if (!brain) {
@@ -282,7 +291,7 @@ function drawBrain(): void {
     node: paint.asphalt,
     nodeOn: paint.yellow,
     label: paint.white,
-  });
+  }, -now / 50);
 }
 new ResizeObserver(() => fit(brainCanvas, brainCtx)).observe(brainCanvas);
 
@@ -421,13 +430,19 @@ ui.clear.addEventListener("click", () => {
 ui.zoomIn.addEventListener("click", () => viewport.zoomBy(1.25));
 ui.zoomOut.addEventListener("click", () => viewport.zoomBy(0.8));
 ui.zoomFit.addEventListener("click", () => viewport.fit(world.graph.points));
+// Keep the view with the world, as the course does, so a reload opens where you left off.
+window.addEventListener("pagehide", saveWorld);
+setInterval(saveWorld, 5000);
 
 /* Boot */
 world.generateRoads();
 world.generateItems();
 seenVersion = world.graph.version;
 requestAnimationFrame(() => {
-  viewport.fit(world.graph.points);
+  if (savedView) {
+    viewport.zoom = savedView.zoom;
+    viewport.center = savedView.center;
+  } else viewport.fit(world.graph.points);
   setTool("roads");
   requestAnimationFrame(frame);
 });

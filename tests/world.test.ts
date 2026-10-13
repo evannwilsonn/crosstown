@@ -131,6 +131,20 @@ describe("OpenStreetMap import", () => {
     expect(g.segments).toHaveLength(2);
     expect(g.segments[0].length()).toBeGreaterThan(1000); // ~111 m at 10 px per meter
   });
+
+  it("marks one-way and single-lane ways as one-way, like the course", () => {
+    const g = parseOsm({
+      elements: [
+        { type: "node", id: 1, lat: 30.44, lon: -84.29 },
+        { type: "node", id: 2, lat: 30.441, lon: -84.29 },
+        { type: "node", id: 3, lat: 30.442, lon: -84.29 },
+        { type: "way", id: 7, nodes: [1, 2], tags: { highway: "residential", oneway: "yes" } },
+        { type: "way", id: 8, nodes: [2, 3], tags: { highway: "residential" } },
+      ],
+    });
+    expect(g.segments.map((s) => s.oneWay)).toEqual([true, false]);
+    expect(Graph.fromJSON(g.toJSON()).segments[0].oneWay).toBe(true);
+  });
 });
 
 describe("driving in the world", () => {

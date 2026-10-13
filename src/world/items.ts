@@ -1,4 +1,4 @@
-import { average, distance, fake3d, lerp2D, Polygon, translate, type Point } from "./geom";
+import { average, fake3d, lerp2D, Polygon, translate, type Point } from "./geom";
 import { lerp } from "../utils";
 
 export interface ItemPaint {
@@ -96,7 +96,7 @@ export class Tree {
   }
 
   distanceTo(p: Point): number {
-    return distance(this.center, p);
+    return this.base.distanceToPoint(p);
   }
 
   draw(ctx: CanvasRenderingContext2D, viewPoint: Point, paint: ItemPaint): void {

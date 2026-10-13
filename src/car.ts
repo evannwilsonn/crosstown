@@ -9,6 +9,8 @@ export class Car {
   speed = 0;
   angle = 0;
   damaged = false;
+  /** Body color for traffic; the course gives each traffic car a random hue. */
+  color?: string;
   polygon: Point[] = [];
   controls: Controls;
   sensor?: Sensor;
@@ -51,7 +53,8 @@ export class Car {
     }
     if (this.sensor) {
       this.sensor.update(borders, traffic);
-      if (this.brain && !this.damaged) {
+      // The course keeps thinking after a crash, so the network view stays live.
+      if (this.brain) {
         const [forward, left, right, reverse] = NeuralNetwork.feedForward(this.sensor.inputs(), this.brain);
         this.controls.forward = forward === 1;
         this.controls.left = left === 1;

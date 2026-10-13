@@ -2,7 +2,7 @@ import { samePoint, Segment, type Point } from "./geom";
 
 export interface GraphJSON {
   points: Point[];
-  segments: { p1: Point; p2: Point }[];
+  segments: { p1: Point; p2: Point; oneWay?: boolean }[];
 }
 
 /** Road network: intersections are points, roads are segments between them. */
@@ -19,7 +19,7 @@ export class Graph {
     for (const s of data.segments) {
       const a = find(s.p1);
       const b = find(s.p2);
-      if (a && b && a !== b) segments.push(new Segment(a, b));
+      if (a && b && a !== b) segments.push(new Segment(a, b, s.oneWay ?? false));
     }
     return new Graph(points, segments);
   }
@@ -27,7 +27,11 @@ export class Graph {
   toJSON(): GraphJSON {
     return {
       points: this.points.map((p) => ({ x: p.x, y: p.y })),
-      segments: this.segments.map((s) => ({ p1: { x: s.p1.x, y: s.p1.y }, p2: { x: s.p2.x, y: s.p2.y } })),
+      segments: this.segments.map((s) => ({
+        p1: { x: s.p1.x, y: s.p1.y },
+        p2: { x: s.p2.x, y: s.p2.y },
+        ...(s.oneWay ? { oneWay: true } : {}),
+      })),
     };
   }
 

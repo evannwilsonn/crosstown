@@ -16,6 +16,10 @@ describe("geometry", () => {
     expect(getIntersection({ x: 0, y: 0 }, { x: 1, y: 1 }, { x: 5, y: 0 }, { x: 6, y: -1 })).toBeNull();
   });
 
+  it("ignores nearly parallel segments (the course's epsilon fix)", () => {
+    expect(getIntersection({ x: 0, y: 0 }, { x: 100, y: 0 }, { x: 0, y: 1e-6 }, { x: 100, y: 2e-6 })).toBeNull();
+  });
+
   it("detects overlapping squares but not distant ones", () => {
     const sq = (x: number) => [{ x, y: 0 }, { x: x + 2, y: 0 }, { x: x + 2, y: 2 }, { x, y: 2 }];
     expect(polysIntersect(sq(0), sq(1))).toBe(true);
@@ -43,6 +47,21 @@ describe("neural network", () => {
     const copy = NeuralNetwork.clone(net);
     copy.levels[0].weights[0][0] = 42;
     expect(net.levels[0].weights[0][0]).not.toBe(42);
+  });
+});
+
+describe("traffic", () => {
+  it("paints traffic with the course's random hues, the same every run", async () => {
+    const { Road } = await import("../src/road");
+    const { TrafficCourse } = await import("../src/traffic");
+    const make = () => {
+      const t = new TrafficCourse(new Road(0, 210), 9);
+      t.extend(0, 1000);
+      return t.cars.map((c) => c.color);
+    };
+    const colors = make();
+    expect(colors[0]).toMatch(/^hsl\(/);
+    expect(make()).toEqual(colors);
   });
 });
 

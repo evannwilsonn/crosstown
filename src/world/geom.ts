@@ -35,7 +35,7 @@ export function getNearestPoint(loc: Point, points: Point[], threshold = Infinit
 }
 
 export class Segment {
-  constructor(public p1: Point, public p2: Point) {}
+  constructor(public p1: Point, public p2: Point, public oneWay = false) {}
 
   length(): number {
     return distance(this.p1, this.p2);

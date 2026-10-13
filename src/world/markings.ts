@@ -104,8 +104,9 @@ export class Parking extends Marking {
   draw(ctx: CanvasRenderingContext2D, paint: Paint): void {
     this.local(ctx);
     ctx.fillStyle = paint.white;
-    ctx.fillRect(-this.width / 2 - 2.5, -this.height / 2, 5, this.height);
-    ctx.fillRect(this.width / 2 - 2.5, -this.height / 2, 5, this.height);
+    // Course: borders are poly.segments[0] and [2], the lines across the lane at front and back.
+    ctx.fillRect(-this.width / 2, -this.height / 2 - 2.5, this.width, 5);
+    ctx.fillRect(-this.width / 2, this.height / 2 - 2.5, this.width, 5);
     // The course draws the P rotated to read from the side of the road.
     ctx.rotate(-Math.PI / 2);
     ctx.fillStyle = paint.white;
@@ -163,7 +164,7 @@ export class Light extends Marking {
   draw(ctx: CanvasRenderingContext2D, paint: Paint): void {
     this.local(ctx);
     const r = this.height * 0.3;
-    // Housing runs across the lane: green on the left, red on the right, as in the course.
+    // Housing runs across the lane: green on the driver's right, red on the left, as in the course.
     ctx.strokeStyle = paint.asphalt;
     ctx.lineWidth = this.height;
     ctx.lineCap = "round";
@@ -172,19 +173,18 @@ export class Light extends Marking {
     ctx.lineTo(this.width * 0.3, 0);
     ctx.stroke();
     ctx.lineCap = "butt";
-    const lamps: [Exclude<LightState, "off">, number, string][] = [
-      ["green", -0.3, paint.green],
-      ["yellow", 0, paint.yellow],
-      ["red", 0.3, paint.red],
+    // Unlit lamps use the course's dark tints (#060, #660, #600).
+    const lamps: [Exclude<LightState, "off">, number, string, string][] = [
+      ["green", 0.3, paint.green, "#060"],
+      ["yellow", 0, paint.yellow, "#660"],
+      ["red", -0.3, paint.red, "#600"],
     ];
-    for (const [s, t, c] of lamps) {
+    for (const [s, t, on, off] of lamps) {
       ctx.beginPath();
       ctx.arc(this.width * t, 0, r, 0, Math.PI * 2);
-      ctx.fillStyle = c;
-      ctx.globalAlpha = this.state === s ? 1 : 0.22;
+      ctx.fillStyle = this.state === s ? on : off;
       ctx.fill();
     }
-    ctx.globalAlpha = 1;
     ctx.restore();
   }
 }

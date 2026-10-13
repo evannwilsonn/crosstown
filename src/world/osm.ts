@@ -56,19 +56,22 @@ export function parseOsm(data: OsmData): Graph {
   const byId = new Map<number, Point>();
   for (const n of nodes) {
     byId.set(n.id, {
-      x: invLerp(minLon, maxLon, n.lon) * width - width / 2,
-      y: invLerp(maxLat, minLat, n.lat) * height - height / 2,
+      // A map that is a single north-south (or east-west) line has zero span on one axis.
+      x: maxLon > minLon ? invLerp(minLon, maxLon, n.lon) * width - width / 2 : 0,
+      y: maxLat > minLat ? invLerp(maxLat, minLat, n.lat) * height - height / 2 : 0,
     });
   }
 
   const used = new Set<Point>();
   const segments: Segment[] = [];
   for (const way of ways) {
+    // Course: a way is one-way when tagged so or when it has a single lane.
+    const oneWay = way.tags?.oneway === "yes" || way.tags?.lanes === "1";
     for (let i = 1; i < way.nodes.length; i++) {
       const a = byId.get(way.nodes[i - 1]);
       const b = byId.get(way.nodes[i]);
       if (!a || !b || a === b) continue;
-      segments.push(new Segment(a, b));
+      segments.push(new Segment(a, b, oneWay));
       used.add(a);
       used.add(b);
     }

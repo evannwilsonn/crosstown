@@ -115,17 +115,17 @@ function drawRoad(): void {
     viewBottom,
   );
 
-  for (const car of sim.course.near(leader.y, viewH / scale)) car.draw(ctx, palette.concrete);
+  for (const car of sim.course.near(leader.y, viewH / scale)) car.draw(ctx, car.color ?? palette.concrete);
 
   ctx.globalAlpha = 0.16;
-  for (const car of sim.cars) if (car !== leader && !car.damaged) car.draw(ctx, palette.white);
+  for (const car of sim.cars) if (car !== leader) car.draw(ctx, car.damaged ? palette.concrete : palette.white);
   ctx.globalAlpha = 1;
 
-  leader.draw(ctx, leader.damaged ? palette.orange : palette.yellow, ui.sensors.checked ? palette.yellow : undefined);
+  leader.draw(ctx, leader.damaged ? palette.concrete : palette.yellow, ui.sensors.checked ? palette.yellow : undefined);
   ctx.restore();
 }
 
-function drawBrain(): void {
+function drawBrain(now: number): void {
   const brain = sim.leader.brain;
   const { width, height } = brainCanvas.getBoundingClientRect();
   if (!brain) {
@@ -138,7 +138,7 @@ function drawBrain(): void {
     node: palette.asphalt,
     nodeOn: palette.yellow,
     label: palette.white,
-  });
+  }, -now / 50);
 }
 
 let lastStats = 0;
@@ -160,7 +160,7 @@ function frame(now: number): void {
     }
   }
   drawRoad();
-  drawBrain();
+  drawBrain(now);
   updateStats(now);
   requestAnimationFrame(frame);
 }
