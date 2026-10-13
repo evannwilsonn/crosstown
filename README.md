@@ -22,12 +22,12 @@ Arrow keys or W A S D drive the car in "Drive it yourself" mode.
 
 | Step | In this project |
 | --- | --- |
-| Problem | Get a car through endless three-lane traffic without crashing, with no labelled data. |
+| Problem | Get a car past traffic on a three-lane road without crashing, with no labelled data. Two traffic modes: Course (the video's exact seven cars, the default) and Endless (seeded rows forever). |
 | Data | None up front. Each car's five ray sensors produce inputs every frame: 0 when the ray sees nothing, rising to 1 as an obstacle gets close. |
 | Baseline | Generation 1 is 100 random networks. Most crash within 100 m. |
 | Model | Feed-forward network, 5 inputs, 6 hidden, 4 outputs (forward, left, right, reverse), step activation. |
-| Evaluation | Fitness is distance driven. Every generation replays the same seeded course, so runs are compared fairly. Cars that stop making progress for 4 s are retired. |
-| Improvement | The farthest car becomes the parent only if it beats the previous parent. Car 0 of each generation is an unmutated copy, so progress never goes backwards. Mutation is adjustable live. |
+| Evaluation | Fitness is distance gained on the traffic, not raw distance: traffic moves forward too, so raw distance rewards a car for tailgating, and that brain never learns to overtake and eventually rear-ends the car ahead. Every generation replays the same course, so runs are compared fairly. |
+| Improvement | The best car becomes the parent only if it beats the previous parent; car 0 of each generation is an unmutated copy, so progress never goes backwards. When a generation brings no improvement, mutation rises by half again (resetting on the next improvement), and 10% of cars get fresh random brains, so a stuck population can find new moves. In headless trials on the Course layout, 4 of 6 runs passed all seven cars within 35 generations. |
 | Deployment | `npm run build` emits a single HTML file for GitHub Pages or any static host. The best brain persists in the browser and can be copied as JSON. |
 
 ## Virtual world (phase 2)
@@ -51,6 +51,10 @@ Traffic lights follow the course's controller: lights are grouped by nearest int
 "Load the course city" opens `public/samples/course-city.json`, converted from the course repo's `big.world` save (real streets from OpenStreetMap with prebuilt buildings and trees).
 
 Both ports were checked against the course videos' full transcripts as well as the course code; details the videos explain (the intersection epsilon that stops buildings flickering, animated dashed network connections, random traffic hues, editor overlay at 30%, parking lines across the lane, one-way roads from OpenStreetMap) are implemented.
+
+Endless traffic is generated so it is always passable: a two-lane block is never followed directly by another, and the open lane moves at most one lane between blocks. Without that rule, random rows can zig-zag the only gap across the road every 210 px, a weave no car can make. On Endless, the course's small 5-6-4 network typically plateaus after passing around eight cars.
+
+`npx tsx scripts/train.ts <generations> <cars> <mutation> <frames> <course|endless>` trains headless and prints progress per generation.
 
 Deliberate differences from the course: lane guides are computed per road with an explicit direction (right-hand traffic), so markings always face the way cars drive; generations advance automatically with a 45 s cap, because distance-driven fitness never stalls for a car driving in circles; maps over 300 roads are view-and-drive only, since regenerating roads is quadratic.
 

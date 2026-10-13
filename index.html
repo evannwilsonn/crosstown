@@ -18,14 +18,14 @@
       <aside class="rail">
         <header class="sign sign--title">
           <h1>Self-driving car</h1>
-          <p>Every car gets the same small neural network. After each run, the car that drove farthest is copied and mutated to breed the next generation.</p>
+          <p>Every car gets the same small neural network. After each run, the car that got furthest past the traffic is copied and mutated to breed the next generation.</p>
         </header>
 
         <section class="sign sign--guide" aria-label="Progress">
           <dl>
             <div><dt>Generation</dt><dd id="stat-generation">1</dd></div>
             <div><dt>Still driving</dt><dd id="stat-alive">0</dd></div>
-            <div><dt>This run</dt><dd id="stat-run">0 m</dd></div>
+            <div><dt>Cars passed</dt><dd id="stat-run">0</dd></div>
             <div><dt>Best so far</dt><dd id="stat-best">None yet</dd></div>
           </dl>
         </section>
@@ -53,6 +53,12 @@
             <span class="field-label">Mutation <output id="mutation-out" for="mutation">10%</output></span>
             <input id="mutation" type="range" min="0" max="0.5" step="0.01" value="0.1" />
           </label>
+
+          <fieldset id="layout" class="segmented">
+            <legend>Traffic</legend>
+            <label><input type="radio" name="layout" value="course" checked /><span>Course</span></label>
+            <label><input type="radio" name="layout" value="endless" /><span>Endless</span></label>
+          </fieldset>
 
           <fieldset id="speed" class="segmented">
             <legend>Sim speed</legend>

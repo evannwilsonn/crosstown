@@ -75,12 +75,72 @@ describe("simulation", () => {
   it("keeps the better brain and advances the generation", () => {
     const sim = new Simulation(0, 210, { population: 20, mutation: 0.1, seed: 1 }, null);
     for (let i = 0; i < 200; i++) sim.step();
-    const leaderProgress = sim.leader.progress;
+    const leaderScore = sim.score(sim.leader);
     sim.nextGeneration();
     expect(sim.generation).toBe(2);
-    expect(sim.parent!.progress).toBe(leaderProgress);
+    expect(sim.parent!.progress).toBe(leaderScore);
     expect(sim.parent).not.toBeNull();
     // The unmutated parent copy is car 0 in the new generation.
     expect(JSON.stringify(sim.cars[0].brain!.toJSON())).toBe(JSON.stringify(sim.parent!.brain));
+  });
+
+  it("gives a tailgater no credit: fitness is distance gained on the traffic", () => {
+    const sim = new Simulation(0, 210, { population: 1, mutation: 0, seed: 1, layout: "course" }, null);
+    const car = sim.cars[0];
+    car.brain = undefined; // drive it by hand at traffic speed
+    for (let i = 0; i < 300; i++) {
+      car.controls.forward = car.speed < 1.95;
+      sim.step();
+    }
+    expect(car.progress).toBeGreaterThan(400); // it moved a long way...
+    expect(sim.score(car)).toBeLessThan(40); // ...but gained almost nothing on traffic
+  });
+
+  it("raises mutation after generations without improvement", () => {
+    const sim = new Simulation(0, 210, { population: 5, mutation: 0.1, seed: 1 }, null);
+    sim.nextGeneration(); // first parent
+    sim.nextGeneration(); // replays the same brains: no improvement
+    expect(sim.stagnant).toBeGreaterThan(0);
+    expect(sim.mutationNow()).toBeGreaterThan(0.1);
+  });
+});
+
+describe("traffic layouts", () => {
+  it("course layout is the video's seven cars", async () => {
+    const { Road } = await import("../src/road");
+    const { TrafficCourse } = await import("../src/traffic");
+    const t = new TrafficCourse(new Road(0, 210), 1, "course");
+    t.extend(-5000);
+    expect(t.cars.map((c) => c.y)).toEqual([-100, -300, -300, -500, -500, -700, -700]);
+  });
+
+  it("endless rows are always passable: no back-to-back double blocks, gap moves at most one lane", async () => {
+    const { Road } = await import("../src/road");
+    const { TrafficCourse } = await import("../src/traffic");
+    const road = new Road(0, 210);
+    for (const seed of [1, 2, 3, 2026]) {
+      const t = new TrafficCourse(road, seed);
+      t.extend(0, 40000);
+      const rows = new Map<number, number[]>();
+      for (const c of t.cars) {
+        const key = Math.round(c.y / 210);
+        const lane = Math.round((c.x - road.left - 35) / 70);
+        rows.set(key, [...(rows.get(key) ?? []), lane]);
+      }
+      const ordered = [...rows.entries()].sort((a, b) => b[0] - a[0]).map(([, lanes]) => lanes);
+      let prevDouble = false;
+      let prevGap = -1;
+      for (const lanes of ordered) {
+        const isDouble = lanes.length === 2;
+        if (isDouble) {
+          expect(prevDouble).toBe(false);
+          const gap = [0, 1, 2].find((l) => !lanes.includes(l))!;
+          if (prevGap >= 0) expect(Math.abs(gap - prevGap)).toBeLessThanOrEqual(1);
+          prevGap = gap;
+        }
+        expect(lanes.length).toBeLessThan(3);
+        prevDouble = isDouble;
+      }
+    }
   });
 });

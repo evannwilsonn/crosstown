@@ -3,9 +3,9 @@ import { NeuralNetwork, type NetworkJSON } from "./network";
 import { Simulation, type Parent } from "./simulation";
 import { drawNetwork } from "./visualizer";
 
-const STORAGE_KEY = "sdc.parent.v1";
+// v2: fitness changed from raw distance to distance gained on traffic.
+const STORAGE_KEY = "sdc.parent.v2";
 const ROAD_WIDTH = 210;
-const PX_PER_METER = 10;
 
 const $ = <T extends HTMLElement>(sel: string) => document.querySelector(sel) as T;
 
@@ -24,6 +24,7 @@ const ui = {
   mutation: $<HTMLInputElement>("#mutation"),
   mutationOut: $<HTMLOutputElement>("#mutation-out"),
   speed: $<HTMLFieldSetElement>("#speed"),
+  layout: $<HTMLFieldSetElement>("#layout"),
   sensors: $<HTMLInputElement>("#sensors"),
   drive: $<HTMLButtonElement>("#drive"),
   next: $<HTMLButtonElement>("#next"),
@@ -68,6 +69,7 @@ const sim = new Simulation(0, ROAD_WIDTH, {
   population: Number(ui.population.value),
   mutation: Number(ui.mutation.value),
   seed: 2026,
+  layout: "course",
 }, loadParent());
 
 let stepsPerFrame = 1;
@@ -90,7 +92,6 @@ function resize(): void {
 new ResizeObserver(resize).observe(roadCanvas);
 new ResizeObserver(() => fitCanvas(brainCanvas, brainCtx)).observe(brainCanvas);
 
-const meters = (px: number) => `${Math.round(px / PX_PER_METER).toLocaleString()} m`;
 
 function announce(msg: string): void {
   ui.status.textContent = msg;
@@ -148,15 +149,22 @@ function updateStats(now: number): void {
   const keys = sim.mode === "KEYS";
   ui.generation.textContent = keys ? "Manual" : String(sim.generation);
   ui.alive.textContent = keys ? "1" : `${sim.alive} of ${sim.cars.length}`;
-  ui.run.textContent = meters(sim.leader.progress);
-  ui.best.textContent = sim.parent ? meters(sim.parent.progress) : "None yet";
+  ui.run.textContent = String(Math.max(sim.bestPassed, sim.passedBy(sim.leader)));
+  ui.best.textContent = sim.parent ? `${sim.parent.passed ?? 0} cars` : "None yet";
 }
 
 function frame(now: number): void {
   for (let i = 0; i < stepsPerFrame; i++) {
+    const cleared = sim.clearedCourse();
     if (sim.step()) {
       saveParent(sim.parent);
-      announce(`Generation ${sim.generation} started from a ${sim.parent ? meters(sim.parent.progress) : "random"} brain.`);
+      if (cleared) announce(`Generation ${sim.generation - 1} cleared all seven cars. Try Endless traffic for a harder road.`);
+      else
+        announce(
+          sim.parent
+            ? `Generation ${sim.generation} is breeding from a brain that passed ${sim.parent.passed ?? 0} cars.`
+            : `Generation ${sim.generation} starts from random brains.`,
+        );
     }
   }
   drawRoad();
@@ -177,6 +185,17 @@ ui.population.addEventListener("change", () => {
 ui.mutation.addEventListener("input", () => {
   ui.mutationOut.value = `${Math.round(Number(ui.mutation.value) * 100)}%`;
   sim.settings.mutation = Number(ui.mutation.value);
+});
+
+ui.layout.addEventListener("change", (e) => {
+  sim.settings.layout = (e.target as HTMLInputElement).value as "course" | "endless";
+  sim.forget();
+  saveParent(null);
+  announce(
+    sim.settings.layout === "course"
+      ? "Course traffic: the seven cars from the video. Learning restarted."
+      : "Endless traffic: seeded rows that never end. Learning restarted.",
+  );
 });
 
 ui.speed.addEventListener("change", (e) => {
