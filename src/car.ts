@@ -90,6 +90,14 @@ export class Car {
     return false;
   }
 
+  /** Moves the car directly (traffic that follows its lane along a curve). */
+  place(x: number, y: number, angle: number): void {
+    this.x = x;
+    this.y = y;
+    this.angle = angle;
+    this.polygon = this.createPolygon();
+  }
+
   private createPolygon(): Point[] {
     const rad = Math.hypot(this.width, this.height) / 2;
     const alpha = Math.atan2(this.width, this.height);

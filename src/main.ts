@@ -110,6 +110,7 @@ function announce(msg: string): void {
   ui.status.textContent = msg;
 }
 
+let camX = 0;
 function drawRoad(): void {
   const ctx = roadCtx;
   const leader = sim.leader;
@@ -118,13 +119,15 @@ function drawRoad(): void {
   const scale = Math.min(1.4, Math.max(1, viewW / (ROAD_WIDTH + 120)));
   ctx.translate(viewW / 2, viewH * 0.74);
   ctx.scale(scale, scale);
-  ctx.translate(0, -leader.y);
+  // Follow the road through its curves, easing so the camera doesn't jerk sideways.
+  camX += (sim.road.centerX(leader.y - 150) - camX) * 0.08;
+  ctx.translate(-camX, -leader.y);
 
   const viewTop = leader.y - (viewH * 0.74) / scale;
   const viewBottom = leader.y + (viewH * 0.26) / scale;
   sim.road.draw(
     ctx,
-    { surface: palette.asphalt, shoulder: palette.shoulder, lane: palette.white, edge: palette.white, center: palette.yellow },
+    { surface: palette.asphalt, shoulder: palette.shoulder, lane: palette.white, edge: palette.white, center: palette.yellow, cone: palette.orange },
     viewTop,
     viewBottom,
   );

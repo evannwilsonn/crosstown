@@ -118,21 +118,30 @@ describe("simulation", () => {
     expect(sim.course.layout).toBe("endless");
   });
 
-  it("levels never run out: traffic tightens to a passable limit, then new behaviors arrive", () => {
-    for (let n = 3; n <= 60; n++) {
-      const a = levelSpec(n - 1);
-      const b = levelSpec(n);
-      expect(b.rowGap).toBeLessThanOrEqual(a.rowGap);
-      expect(b.rowGap).toBeGreaterThanOrEqual(150); // never denser than the passable limit
-      expect(b.trafficSpeed).toBeGreaterThanOrEqual(a.trafficSpeed);
-      expect(b.goal).toBeGreaterThanOrEqual(a.goal);
+  it("levels never run out: traffic ramps within each road, and each road starts harder than the last", () => {
+    const tier = (n: number) => [-levelSpec(n).rowGap, levelSpec(n).trafficSpeed, levelSpec(n).goal];
+    for (let n = 2; n <= 90; n++) {
+      const s = levelSpec(n);
+      expect(s.rowGap).toBeGreaterThanOrEqual(150); // never denser than the passable limit
+      if ((n - 1) % 3 !== 0 && n > 2) {
+        // Within a road, every level is at least as hard as the one before.
+        const [g0, v0, goal0] = tier(n - 1);
+        const [g1, v1, goal1] = tier(n);
+        expect(g1).toBeGreaterThanOrEqual(g0);
+        expect(v1).toBeGreaterThanOrEqual(v0);
+        expect(goal1).toBeGreaterThanOrEqual(goal0);
+      }
     }
-    expect(levelSpec(7).laneSpread).toBe(0);
-    expect(levelSpec(8).laneSpread).toBeGreaterThan(0);
-    expect(levelSpec(10).changeRate).toBe(0);
-    expect(levelSpec(11).changeRate).toBeGreaterThan(0);
-    expect(levelSpec(1).road).toBe(0);
+    // Each road's first level is harder than the previous road's first level (once past road 1).
+    for (let road = 2; road < 25; road++) expect(levelSpec(road * 3 + 1).goal).toBeGreaterThanOrEqual(levelSpec(road * 3 - 2).goal);
     expect(levelSpec(4).road).toBe(1); // a new road every three levels
+    // New behaviors arrive in later roads and stay.
+    const firstWith = (f: (n: number) => boolean) => { for (let n = 2; n < 200; n++) if (f(n)) return n; return -1; };
+    const speeds = firstWith((n) => levelSpec(n).laneSpread > 0);
+    const changers = firstWith((n) => levelSpec(n).changeRate > 0);
+    expect(speeds).toBeGreaterThan(9);
+    expect(changers).toBeGreaterThan(speeds);
+    expect(levelSpec(changers + 30).changeRate).toBeGreaterThan(0);
   });
 
   it("lane-changing traffic moves to the next lane and takes its speed", async () => {
@@ -264,6 +273,51 @@ describe("traffic layouts", () => {
         expect(lanes.length).toBeLessThan(3);
         prevDouble = isDouble;
       }
+    }
+  });
+});
+
+describe("roads", () => {
+  it("curves start straight, then bend, with borders that follow the road", async () => {
+    const { Road } = await import("../src/road");
+    const road = new Road(0, 210, 3, { laneCount: 3, bends: [{ amplitude: 70, wavelength: 1700, phase: 1 }] });
+    expect(road.centerX(0)).toBe(0); // the start line is straight
+    const xs = [-1500, -2000, -2500, -3000].map((y) => road.centerX(y));
+    expect(Math.max(...xs) - Math.min(...xs)).toBeGreaterThan(20); // further on it bends
+    for (const [a, b] of road.bordersNear(-2000)) {
+      const mid = (a.y + b.y) / 2;
+      const [l, r] = road.edgesAt(mid);
+      const x = (a.x + b.x) / 2;
+      expect(Math.min(Math.abs(x - l), Math.abs(x - r))).toBeLessThan(2);
+    }
+  });
+
+  it("construction zones close an outside lane, and traffic merges out of it", async () => {
+    const { Road } = await import("../src/road");
+    const { TrafficCourse } = await import("../src/traffic");
+    const road = new Road(0, 210, 3, { laneCount: 3, bends: [], closures: { start: 600, period: 1600, length: 500 } });
+    const [l, r] = road.edgesAt(-900);
+    expect(r - l).toBeCloseTo(140, 0); // one 70 px lane closed in the middle of the zone
+    const t = new TrafficCourse(road, 3, "endless", { rowGap: 200, speed: 2 });
+    t.extend(0, 3000);
+    for (let i = 0; i < 600; i++) {
+      t.update();
+      // No traffic car sits fully inside a closed lane.
+      for (const c of t.cars) {
+        const z = road.closure(c.y);
+        if (z && z.amount >= 1) expect(Math.abs(t.laneAt(c) - z.lane)).toBeGreaterThan(0.5);
+      }
+    }
+  });
+
+  it("every road number gives a drivable shape: two or three lanes, gentle bends", async () => {
+    const { roadShape } = await import("../src/simulation");
+    for (let r = 0; r < 30; r++) {
+      const s = roadShape(r, 99);
+      expect([2, 3]).toContain(s.laneCount);
+      // Steepest sideways slope of all bends together stays gentle (under about 30 degrees).
+      const slope = s.bends.reduce((sum, b) => sum + (2 * Math.PI * b.amplitude) / b.wavelength, 0);
+      expect(slope).toBeLessThan(0.6);
     }
   });
 });

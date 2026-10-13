@@ -1,7 +1,8 @@
 import { Car } from "./car";
 import { Neat, type NeatJSON } from "./neat";
 import type { NetworkJSON } from "./network";
-import { Road } from "./road";
+import { Road, type RoadShape } from "./road";
+import { mulberry32 } from "./utils";
 import { Sensor } from "./sensor";
 import { TrafficCourse, type TrafficLayout } from "./traffic";
 
@@ -23,10 +24,12 @@ export interface Parent {
 
 /**
  * A stage of the highway. Levels never run out. Level 1 is seven cars in the course's pattern;
- * after that traffic never ends and gets harder level by level: rows closer together and faster
- * up to the densest traffic that stays passable, then lanes moving at different speeds, then
- * drivers who change lanes, with more cars to pass each time. Every three levels the road
- * itself changes.
+ * after that traffic never ends. Every three levels the road itself changes (two lanes, curves,
+ * construction zones, then mixes). A new road starts with lighter traffic so the brains can
+ * learn its new skill first, then traffic ramps up over its three levels: rows closer together
+ * and faster up to the densest traffic that stays passable, then lanes moving at different
+ * speeds, then drivers who change lanes, with more cars to pass. Each road starts harder than
+ * the last one did, so difficulty keeps rising.
  */
 export interface Level {
   number: number;
@@ -46,9 +49,9 @@ export const LEVELS_PER_ROAD = 3;
 /** Densest rows that stay passable, and the fastest traffic. */
 const MIN_ROW_GAP = 150;
 const MAX_TRAFFIC_SPEED = 2.5;
-/** Lanes start running at different speeds from this level, and drivers change lanes from this one. */
-const LANE_SPEEDS_FROM = 8;
-const LANE_CHANGES_FROM = 11;
+/** Lanes start running at different speeds from this traffic tier, and drivers change lanes from this one. */
+const LANE_SPEEDS_FROM = 6;
+const LANE_CHANGES_FROM = 9;
 const MAX_GOAL = 50;
 
 const TRAFFIC_NAMES = ["Open road", "Light traffic", "Steady traffic", "Heavy traffic", "Congestion", "Rush hour"];
@@ -59,9 +62,11 @@ export function levelSpec(n: number): Level {
   if (n <= 1) {
     return { number: 1, name: "Seven cars", layout: "seven", rowGap: 210, trafficSpeed: 2, laneSpread: 0, changeRate: 0, goal: 7, road };
   }
-  const k = n - 2;
-  const laneSpread = n >= LANE_SPEEDS_FROM ? Math.min(0.4, 0.1 * (n - LANE_SPEEDS_FROM + 1)) : 0;
-  const changeRate = n >= LANE_CHANGES_FROM ? Math.min(0.004, 0.001 * (n - LANE_CHANGES_FROM + 1)) : 0;
+  // Traffic tier: one step per level within a road, one step per road at each road's start.
+  const stage = (n - 1) % LEVELS_PER_ROAD;
+  const k = road + stage - 1;
+  const laneSpread = k >= LANE_SPEEDS_FROM ? Math.min(0.4, 0.1 * (k - LANE_SPEEDS_FROM + 1)) : 0;
+  const changeRate = k >= LANE_CHANGES_FROM ? Math.min(0.004, 0.001 * (k - LANE_CHANGES_FROM + 1)) : 0;
   const extras = [laneSpread ? "lanes at different speeds" : "", changeRate ? "drivers changing lanes" : ""].filter(Boolean);
   const base = TRAFFIC_NAMES[Math.min(k, TRAFFIC_NAMES.length - 1)];
   return {
@@ -75,6 +80,39 @@ export function levelSpec(n: number): Level {
     goal: Math.min(MAX_GOAL, 15 + 2 * k),
     road,
   };
+}
+
+/** Lane width on every road, in px (the course's 210 px road has three 70 px lanes). */
+export const LANE_WIDTH = 70;
+
+/**
+ * The road for a stage of the highway. Road 1 is the course's straight three lanes. Then two
+ * lanes (fewer escape routes), then curves, then construction zones that close a lane, then
+ * roads that mix all three and get curvier. `seed` picks the exact curves.
+ */
+export function roadShape(road: number, seed: number): RoadShape {
+  const rand = mulberry32(seed ^ (road * 0x51ed27));
+  const bend = (amplitude: number, wavelength: number) => ({ amplitude, wavelength, phase: rand() * Math.PI * 2 });
+  const zones = { start: 900 + rand() * 400, period: 1500 + rand() * 500, length: 520 };
+  switch (road) {
+    case 0:
+      return { laneCount: 3, bends: [] };
+    case 1:
+      return { laneCount: 2, bends: [] };
+    case 2:
+      return { laneCount: 3, bends: [bend(70, 1700), bend(22, 750)] };
+    case 3:
+      return { laneCount: 3, bends: [bend(50, 1800)], closures: zones };
+    default: {
+      const k = road - 4;
+      const lanes = rand() < 0.35 ? 2 : 3;
+      return {
+        laneCount: lanes,
+        bends: [bend(Math.min(90, 70 + 5 * k), 1500 + rand() * 500), bend(Math.min(20, 12 + 2 * k), 650 + rand() * 200)],
+        closures: lanes === 3 ? zones : undefined,
+      };
+    }
+  }
 }
 
 /** The first levels, for reference and tests. */
@@ -129,7 +167,9 @@ const LEADER_PATIENCE = 420; // frames the leader may go without gaining ground 
 const MAX_GENERATION_FRAMES = 60 * 240;
 
 export class Simulation {
-  road: Road;
+  road!: Road;
+  private roadIndex = -1;
+  private roadX = 0;
   course!: TrafficCourse;
   cars: Car[] = [];
   leader!: Car;
@@ -154,8 +194,8 @@ export class Simulation {
   private leaderPassed = 0;
   private goalReached = false;
 
-  constructor(roadX: number, roadWidth: number, public settings: SimSettings, saved: SavedState | null = null) {
-    this.road = new Road(roadX, roadWidth, 3);
+  constructor(roadX: number, _roadWidth: number, public settings: SimSettings, saved: SavedState | null = null) {
+    this.roadX = roadX;
     if (saved) {
       this.neat = Neat.fromJSON(saved.neat);
       if (saved.seed !== undefined) settings.seed = saved.seed;
@@ -180,6 +220,12 @@ export class Simulation {
   reset(): void {
     this.cars.forEach((c) => c.dispose());
     const spec = this.levelSpec;
+    // The road stays the same for all of its levels, so the brains get a fair shot at it.
+    if (spec.road !== this.roadIndex) {
+      const shape = roadShape(spec.road, this.settings.seed);
+      this.road = new Road(this.roadX, shape.laneCount * LANE_WIDTH, shape.laneCount, shape);
+      this.roadIndex = spec.road;
+    }
     // New traffic every generation, so brains learn to read the road instead of memorizing one
     // layout. Every car in a generation drives the same traffic, so they still compare fairly.
     this.course = new TrafficCourse(this.road, this.trafficSeed(), spec.layout, {
@@ -188,7 +234,7 @@ export class Simulation {
       laneSpread: spec.laneSpread,
       changeRate: spec.changeRate,
     });
-    const x = this.road.getLaneCenter(1);
+    const x = this.road.getLaneCenter(Math.min(1, this.road.laneCount - 1));
     const withSensors = (car: Car) => {
       car.sensor = new Sensor(car, RAYS, 150, RAY_SPREAD);
       return car;
@@ -258,7 +304,7 @@ export class Simulation {
     this.course.update();
     this.trafficTravel += this.course.speed;
     for (const car of this.cars) {
-      car.update(this.road.borders, this.course.near(car.y), [car.speed / car.maxSpeed]);
+      car.update(this.road.bordersNear(car.y), this.course.near(car.y), [car.speed / car.maxSpeed]);
       const gained = car.progress - this.trafficTravel;
       if (gained > (this.scores.get(car) ?? 0)) this.scores.set(car, gained);
     }

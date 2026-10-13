@@ -16,8 +16,10 @@ export interface TrafficOptions {
   changeRate?: number;
 }
 
-/** How far a lane-changing car turns its wheel: about 2 s to cross one lane at traffic speed. */
+/** How far a lane-changing car turns its wheel, for the look of it. */
 const CHANGE_ANGLE = 0.25;
+/** Lanes crossed per frame while changing lanes: about 2 s for one lane. */
+const LANE_CHANGE_STEP = 1 / 120;
 
 const ROW_GAP = 210;
 const TRAFFIC_SPEED = 2;
@@ -37,8 +39,8 @@ export class TrafficCourse {
   readonly speed: number;
   private laneSpread: number;
   private changeRate: number;
-  /** Lane each traffic car is heading for while it changes lanes. */
-  private changing = new Map<Car, number>();
+  /** Each traffic car's lane, fractional while it moves between lanes, and the lane it's heading for. */
+  private lanes = new Map<Car, { at: number; target: number }>();
 
   constructor(private road: Road, seed: number, public layout: TrafficLayout = "endless", options: TrafficOptions = {}) {
     this.rowGap = options.rowGap ?? ROW_GAP;
@@ -57,9 +59,9 @@ export class TrafficCourse {
   private placeRandomSeven(): void {
     const lanes = [...Array(this.road.laneCount).keys()];
     const add = (lane: number, y: number) => {
-      const car = new Car(this.road.getLaneCenter(lane), y, 30, 50, "DUMMY", this.speed);
+      const car = new Car(this.road.laneCenterAt(lane, y), y, 30, 50, "DUMMY", this.speed);
       car.color = `hsl(${290 + this.rng() * 260}, 100%, 60%)`;
-      this.cars.push(car);
+      this.add(car, lane);
     };
     add(lanes[Math.floor(this.rng() * lanes.length)], -100);
     for (const y of [-300, -500, -700]) {
@@ -72,10 +74,15 @@ export class TrafficCourse {
   private placeCourseLayout(): void {
     const rows: [number, number][] = [[1, -100], [0, -300], [2, -300], [0, -500], [1, -500], [1, -700], [2, -700]];
     for (const [lane, y] of rows) {
-      const car = new Car(this.road.getLaneCenter(lane), y, 30, 50, "DUMMY", this.speed);
+      const car = new Car(this.road.laneCenterAt(lane, y), y, 30, 50, "DUMMY", this.speed);
       car.color = `hsl(${290 + this.rng() * 260}, 100%, 60%)`;
-      this.cars.push(car);
+      this.add(car, lane);
     }
+  }
+
+  private add(car: Car, lane: number): void {
+    this.cars.push(car);
+    this.lanes.set(car, { at: lane, target: lane });
   }
 
   /** Open lane of the last row that blocked two lanes, so the next one stays reachable. */
@@ -92,24 +99,27 @@ export class TrafficCourse {
   extend(leaderY: number, lookahead = 1400): void {
     if (this.layout !== "endless") return;
     while (this.nextRowY > leaderY - lookahead) {
-      const lanes = [...Array(this.road.laneCount).keys()];
+      const y = this.nextRowY;
+      // Rows never put cars in a lane that is closed for construction here.
+      const lanes = [...Array(this.road.laneCount).keys()].filter((l) => !this.road.closedAhead(l, y + 60, 120));
       let blocked: number[];
-      if (!this.lastWasDouble && this.rng() < 0.5) {
+      if (lanes.length >= 3 && !this.lastWasDouble && this.rng() < 0.5) {
         const options = lanes.filter((l) => Math.abs(l - this.lastGap) <= 1);
-        const gap = options[Math.floor(this.rng() * options.length)];
+        const gap = options[Math.floor(this.rng() * options.length)] ?? lanes[0];
         blocked = lanes.filter((l) => l !== gap);
         this.lastGap = gap;
         this.lastWasDouble = true;
       } else {
-        blocked = [lanes[Math.floor(this.rng() * lanes.length)]];
+        // On a two-lane stretch (or a narrowed one) a row blocks one lane at most.
+        blocked = lanes.length >= 2 ? [lanes[Math.floor(this.rng() * lanes.length)]] : [];
         this.lastWasDouble = false;
       }
       for (const lane of blocked) {
         const jitter = (this.rng() - 0.5) * 40;
-        const car = new Car(this.road.getLaneCenter(lane), this.nextRowY + jitter, 30, 50, "DUMMY", this.laneSpeed(lane));
+        const car = new Car(this.road.laneCenterAt(lane, y + jitter), y + jitter, 30, 50, "DUMMY", this.laneSpeed(lane));
         if (this.cars.length) car.speed = car.maxSpeed; // join the flow at its speed
         car.color = `hsl(${290 + this.rng() * 260}, 100%, 60%)`; // the course's getRandomColor, seeded
-        this.cars.push(car);
+        this.add(car, lane);
       }
       this.nextRowY -= this.rowGap;
     }
@@ -122,47 +132,57 @@ export class TrafficCourse {
     return this.speed * (1 + this.laneSpread * side);
   }
 
-  private laneOf(car: Car): number {
-    const w = this.road.width / this.road.laneCount;
-    return Math.max(0, Math.min(this.road.laneCount - 1, Math.floor((car.x - this.road.left) / w)));
-  }
-
   /**
    * Some drivers change lanes on their own, into an adjacent lane with room around them, and
-   * settle to that lane's speed. They never check behind for the learning cars, like real
-   * traffic, so the brains have to watch their sides.
+   * settle to that lane's speed. Drivers in a lane that closes ahead merge out of it. Nobody
+   * checks behind for the learning cars, like real traffic, so the brains have to watch their sides.
    */
   private changeLanes(): void {
+    const n = this.road.laneCount;
     for (const car of this.cars) {
-      const target = this.changing.get(car);
-      if (target !== undefined) {
-        const tx = this.road.getLaneCenter(target);
-        if (Math.abs(car.x - tx) < 2) {
-          car.x = tx;
-          car.angle = 0;
-          car.maxSpeed = this.laneSpeed(target);
-          this.changing.delete(car);
-        } else {
-          car.angle = car.x < tx ? -CHANGE_ANGLE : CHANGE_ANGLE;
-        }
-        continue;
+      const l = this.lanes.get(car)!;
+      if (l.at !== l.target) continue;
+      let next = -1;
+      if (this.road.closedAhead(l.target, car.y, 260)) {
+        next = l.target === 0 ? 1 : l.target - 1; // merge toward the open lanes
+      } else if (this.changeRate > 0 && this.rng() < this.changeRate) {
+        const pick = l.target + (this.rng() < 0.5 ? -1 : 1);
+        const room = this.cars.every((o) => {
+          if (o === car) return true;
+          const ol = this.lanes.get(o)!;
+          return Math.abs(ol.at - pick) > 0.6 || Math.abs(o.y - car.y) > 110;
+        });
+        if (pick >= 0 && pick < n && room && !this.road.closedAhead(pick, car.y, 400)) next = pick;
       }
-      if (this.changeRate <= 0 || this.rng() >= this.changeRate) continue;
-      const lane = this.laneOf(car);
-      const next = lane + (this.rng() < 0.5 ? -1 : 1);
-      if (next < 0 || next >= this.road.laneCount) continue;
-      const nx = this.road.getLaneCenter(next);
-      const room = this.cars.every((o) => o === car || Math.abs(o.x - nx) > 20 || Math.abs(o.y - car.y) > 110);
-      if (room) this.changing.set(car, next);
+      if (next >= 0 && next < n) l.target = next;
     }
   }
 
   update(): void {
     this.changeLanes();
-    for (const car of this.cars) car.update([], []);
+    for (const car of this.cars) {
+      car.update([], []);
+      // Traffic follows its lane along the road, easing across when it changes lanes.
+      const l = this.lanes.get(car)!;
+      let tilt = 0;
+      if (l.at !== l.target) {
+        const dir = Math.sign(l.target - l.at);
+        l.at += dir * LANE_CHANGE_STEP;
+        if ((l.target - l.at) * dir <= 0) {
+          l.at = l.target;
+          car.maxSpeed = this.laneSpeed(l.target);
+        } else tilt = -dir * CHANGE_ANGLE;
+      }
+      car.place(this.road.laneCenterAt(l.at, car.y), car.y, this.road.heading(car.y) + tilt);
+    }
     // Rows ahead are placed relative to the moving traffic, not the map: without this, rows made
     // later land closer to the ones already driving, and the spacing collapses as the run goes on.
     this.nextRowY -= this.speed;
+  }
+
+  /** Lane a traffic car is in (fractional while changing). */
+  laneAt(car: Car): number {
+    return this.lanes.get(car)?.at ?? 0;
   }
 
   /** Traffic within `range` of y, for cheaper collision and sensor checks. */
