@@ -77,7 +77,11 @@ tests/core.test.ts, tests/world.test.ts
 
 ## Design notes
 
-The interface borrows from US highway signage: Overpass (an open-source revival of Highway Gothic), green guide signs for the title and progress, real lane paint on the road, and construction orange reserved for the one action that interrupts a run. In the network view, yellow connections excite a neuron and blue ones inhibit it; the dashed ring on each neuron is its threshold.
+The two pages have deliberately separate designs, both unlike the course's plain gray canvas.
+
+**Highway trainer:** the interface borrows from US highway signage: Overpass (an open-source revival of Highway Gothic), green guide signs for the title and progress, real lane paint on the road, and construction orange reserved for the one action that interrupts a run. In the network view, yellow connections excite a neuron and blue ones inhibit it; the dashed ring on each neuron is its threshold.
+
+**Virtual world:** a light "architect's model". The map runs full-bleed like a white foam city model on a planning table, with roofs in slate, sage foam trees and charcoal roads. The controls float above it as nested trays (a translucent shell holding an opaque core): a pill tool palette at the top, title, stats and training on the left, a collapsible Map menu at the top right, and the minimap at the bottom right. It uses Geist type and a cobalt accent for selection, the primary action and the leading car. On phones the trays stack under the map.
 
 ## Next
 

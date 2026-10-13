@@ -1,4 +1,4 @@
-import "../style.css";
+import "./world.css";
 import type { Parent } from "../simulation";
 import { GraphEditor, MarkingEditor, type Editor } from "./editors";
 import { Graph } from "./graph";
@@ -74,8 +74,9 @@ const paint: WorldPaint = {
     roofEdge: color("--roof-edge"),
     shadow: color("--ground-shadow"),
     // Course trees fade from rgb(30,50,70) at the base to rgb(30,200,70) at the top; toned to sit on this ground.
-    leafLow: [26, 58, 42],
-    leafHigh: [56, 150, 86],
+    // Sage foam trees, light enough to sit on the model's pale ground.
+    leafLow: [118, 146, 122],
+    leafHigh: [196, 214, 184],
   },
 };
 const ground = color("--ground");
@@ -244,7 +245,7 @@ function frame(nowMs: number): void {
   ctx.globalAlpha = 1;
   if (sim.leader) {
     const crashed = sim.leader.damaged;
-    sim.leader.draw(ctx, crashed ? paint.items.wallEdge : paint.yellow, ui.sensors.checked ? paint.yellow : undefined);
+    sim.leader.draw(ctx, crashed ? paint.items.wallEdge : color("--car"), ui.sensors.checked ? color("--car") : undefined);
   }
 
   world.drawItems(ctx, viewPoint, radius, paint.items);
@@ -257,7 +258,7 @@ function frame(nowMs: number): void {
   drawMinimap(
     miniCtx, mini.clientWidth, mini.clientHeight, world.graph, viewport.center,
     { width: w / viewport.zoom, height: h / viewport.zoom }, sim.cars, sim.leader,
-    { road: paint.white, car: paint.yellow, view: paint.yellow },
+    { road: color("--asphalt"), car: color("--accent"), view: color("--accent") },
   );
 
   drawBrain(nowMs);
@@ -268,7 +269,7 @@ function frame(nowMs: number): void {
     ui.generation.textContent = !driving ? "Parked" : sim.mode === "KEYS" ? "Manual" : String(sim.generation);
     ui.alive.textContent = !driving ? "0" : `${sim.alive} of ${sim.cars.length}`;
     ui.run.textContent = meters(sim.leader?.progress ?? 0);
-    ui.best.textContent = sim.parent ? meters(sim.parent.progress) : "None yet";
+    ui.best.textContent = sim.parent ? meters(sim.parent.progress) : "None";
   }
   requestAnimationFrame(frame);
 }
@@ -279,18 +280,18 @@ function drawBrain(now: number): void {
   if (!brain) {
     brainCtx.clearRect(0, 0, width, height);
     brainCtx.fillStyle = color("--ink-muted");
-    brainCtx.font = "600 14px Overpass, system-ui, sans-serif";
+    brainCtx.font = "500 13px Geist, system-ui, sans-serif";
     brainCtx.textAlign = "center";
     brainCtx.textBaseline = "middle";
-    brainCtx.fillText("The network appears once the cars are driving.", width / 2, height / 2);
+    brainCtx.fillText("Appears when the cars drive", width / 2, height / 2);
     return;
   }
   drawNetwork(brainCtx, brain, width, height, {
-    positive: paint.yellow,
-    negative: color("--sign-blue"),
-    node: paint.asphalt,
-    nodeOn: paint.yellow,
-    label: paint.white,
+    positive: color("--pos"),
+    negative: color("--neg"),
+    node: color("--ink"),
+    nodeOn: color("--pos"),
+    label: color("--ink"),
   }, -now / 50);
 }
 new ResizeObserver(() => fit(brainCanvas, brainCtx)).observe(brainCanvas);

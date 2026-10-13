@@ -7,69 +7,44 @@
     <meta name="description" content="Draw a road network, generate a town around it, and let self-driving cars learn to drive it." />
     <link rel="preconnect" href="https://fonts.googleapis.com" />
     <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin />
-    <link href="https://fonts.googleapis.com/css2?family=Overpass:wght@400;600;800&display=swap" rel="stylesheet" />
+    <link href="https://fonts.googleapis.com/css2?family=Geist:wght@400;500;600;700&display=swap" rel="stylesheet" />
   </head>
   <body>
-    <div class="app">
-      <main class="road-panel world-panel">
+    <div class="stage">
+      <div class="map-wrap">
         <canvas id="world" tabindex="0" aria-label="World editor. Roads, buildings and trees. Use the tool palette to edit; the minimap shows the whole network."></canvas>
-        <div class="map-overlay">
+        <div class="tray tray--map">
           <div class="zoom" role="group" aria-label="Zoom">
             <button id="zoom-in" class="icon-btn" type="button" aria-label="Zoom in">+</button>
             <button id="zoom-out" class="icon-btn" type="button" aria-label="Zoom out">−</button>
-            <button id="zoom-fit" class="icon-btn icon-btn--wide" type="button">Fit</button>
+            <button id="zoom-fit" class="icon-btn" type="button">Fit</button>
           </div>
           <canvas id="minimap" width="180" height="180" aria-label="Minimap"></canvas>
         </div>
-      </main>
+      </div>
 
-      <aside class="rail">
-        <header class="sign sign--title">
+      <div class="left-col">
+      <section class="tray tray--title" aria-label="Virtual world">
+        <div class="core title">
           <h1>Virtual world</h1>
-          <p>Draw roads, place markings, and the town builds itself around them. Then send the cars out to learn the streets.</p>
-        </header>
-
-        <section class="panel" aria-labelledby="tools-title">
-          <div class="panel-head">
-            <h2 id="tools-title">Edit the map</h2>
-          </div>
-          <fieldset id="tools" class="tools">
-            <legend class="visually-hidden">Tool</legend>
-            <label><input type="radio" name="tool" value="roads" checked /><span>Roads</span></label>
-            <label><input type="radio" name="tool" value="stop" /><span>Stop</span></label>
-            <label><input type="radio" name="tool" value="yield" /><span>Yield</span></label>
-            <label><input type="radio" name="tool" value="light" /><span>Light</span></label>
-            <label><input type="radio" name="tool" value="crossing" /><span>Crossing</span></label>
-            <label><input type="radio" name="tool" value="parking" /><span>Parking</span></label>
-            <label><input type="radio" name="tool" value="start" /><span>Start</span></label>
-            <label><input type="radio" name="tool" value="target" /><span>Target</span></label>
-          </fieldset>
-          <p id="tool-help" class="help">Click empty ground to add an intersection. Click another to connect them. Drag to move one, right-click to delete it.</p>
-          <p class="help help--quiet">Scroll to zoom. Hold Space and drag, or drag with the middle button, to pan.</p>
-        </section>
-
-        <section class="sign sign--guide" aria-label="Driving progress">
-          <dl>
+          <p>Draw the streets and the town builds itself. Then send the cars out to learn them.</p>
+          <dl class="stats" aria-label="Driving progress">
             <div><dt>Generation</dt><dd id="stat-generation">Parked</dd></div>
-            <div><dt>Still driving</dt><dd id="stat-alive">0</dd></div>
+            <div><dt>Driving</dt><dd id="stat-alive">0</dd></div>
             <div><dt>This run</dt><dd id="stat-run">0 m</dd></div>
-            <div><dt>Best so far</dt><dd id="stat-best">None yet</dd></div>
+            <div><dt>Best</dt><dd id="stat-best">None</dd></div>
           </dl>
-        </section>
+        </div>
+      </section>
 
-        <section class="panel brain" aria-labelledby="brain-title">
-          <div class="panel-head">
-            <h2 id="brain-title">Leader's brain</h2>
-            <p class="legend">
-              <span class="swatch swatch--pos"></span>Excites
-              <span class="swatch swatch--neg"></span>Inhibits
-            </p>
-          </div>
-          <canvas id="brain" aria-label="Neural network of the leading car: five sensor inputs, six hidden neurons, four outputs for forward, left, right and reverse."></canvas>
-        </section>
-
-        <section class="panel controls" aria-labelledby="drive-title">
+      <section class="tray tray--drive" aria-labelledby="drive-title">
+        <div class="core">
           <h2 id="drive-title" class="visually-hidden">Driving</h2>
+          <div>
+            <p class="section-label">Leader's brain</p>
+            <canvas id="brain" aria-label="Neural network of the leading car: five sensor inputs, six hidden neurons, four outputs for forward, left, right and reverse."></canvas>
+            <p class="legend"><span><i style="background: var(--pos)"></i>Excites</span><span><i style="background: var(--neg)"></i>Inhibits</span></p>
+          </div>
           <label class="field">
             <span class="field-label">Cars per generation <output id="population-out" for="population">100</output></span>
             <input id="population" type="range" min="10" max="300" step="10" value="100" />
@@ -78,47 +53,60 @@
             <span class="field-label">Mutation <output id="mutation-out" for="mutation">10%</output></span>
             <input id="mutation" type="range" min="0" max="0.5" step="0.01" value="0.1" />
           </label>
-          <label class="toggle">
-            <input id="sensors" type="checkbox" checked />
-            <span>Show the leader's sensors</span>
-          </label>
-          <div class="actions">
-            <button id="train" class="btn btn--primary" type="button">Train the cars</button>
+          <label class="toggle"><input id="sensors" type="checkbox" checked /><span>Show the leader's sensors</span></label>
+          <div class="btns">
+            <button id="train" class="btn btn--primary" type="button">Train the cars <span class="knob" aria-hidden="true">→</span></button>
             <button id="drive-self" class="btn" type="button">Drive it yourself</button>
-            <button id="stop-driving" class="btn btn--quiet" type="button" disabled>Park and edit</button>
-            <button id="forget" class="btn btn--quiet" type="button">Reset learning</button>
+            <button id="stop-driving" class="btn" type="button" disabled>Park and edit</button>
+            <button id="forget" class="btn btn--quiet btn--span" type="button">Reset learning</button>
           </div>
-        </section>
+        </div>
+      </section>
+      </div>
 
-        <section class="panel controls" aria-labelledby="map-title">
-          <div class="panel-head">
-            <h2 id="map-title">Map file</h2>
-            <span class="legend">Saves in this browser as you edit</span>
-          </div>
-          <div class="actions">
-            <label class="btn file-btn">
-              <input id="import" type="file" accept=".json,.world,application/json" />
-              Import map
-            </label>
-            <button id="copy-json" class="btn" type="button">Copy map JSON</button>
-            <button id="sample" class="btn btn--quiet" type="button">Load the sample town</button>
-            <button id="course-city" class="btn btn--quiet" type="button">Load the course city</button>
-            <button id="clear" class="btn btn--quiet btn--span" type="button">Clear the map</button>
-          </div>
-          <details class="osm">
-            <summary>Use a real city from OpenStreetMap</summary>
-            <ol>
-              <li>Open <a href="https://overpass-turbo.eu" target="_blank" rel="noopener">overpass-turbo.eu</a> and frame a few blocks.</li>
-              <li>Paste this query and run it.</li>
-              <li>Export the result as raw OSM data (JSON), then use Import map. Saves from the course's editor (.world files) import too.</li>
-            </ol>
-            <pre id="overpass-query" tabindex="0"></pre>
-            <button id="copy-query" class="btn btn--quiet" type="button">Copy query</button>
-          </details>
-        </section>
+      <nav class="tray tray--tools" aria-label="Map tools">
+        <fieldset id="tools" class="tools">
+          <legend class="visually-hidden">Tool</legend>
+          <label><input type="radio" name="tool" value="roads" checked /><span>Roads</span></label>
+          <label><input type="radio" name="tool" value="stop" /><span>Stop</span></label>
+          <label><input type="radio" name="tool" value="yield" /><span>Yield</span></label>
+          <label><input type="radio" name="tool" value="light" /><span>Light</span></label>
+          <label><input type="radio" name="tool" value="crossing" /><span>Crossing</span></label>
+          <label><input type="radio" name="tool" value="parking" /><span>Parking</span></label>
+          <label><input type="radio" name="tool" value="start" /><span>Start</span></label>
+          <label><input type="radio" name="tool" value="target" /><span>Target</span></label>
+        </fieldset>
+        <p id="tool-help" class="tool-help">Click empty ground to add an intersection. Click another to connect them. Drag to move one, right-click to delete it.</p>
+      </nav>
 
-        <p id="status" class="status" role="status" aria-live="polite">Sample town loaded. Pick a tool, or press Train the cars.</p>
-      </aside>
+
+      <section class="tray tray--file" aria-label="Map file">
+        <details class="file">
+          <summary>Map</summary>
+          <div class="file-body">
+            <p class="file-note">Saves in this browser as you edit.</p>
+            <div class="btns">
+              <label class="btn file-btn"><input id="import" type="file" accept=".json,.world,application/json" />Import</label>
+              <button id="copy-json" class="btn" type="button">Copy JSON</button>
+              <button id="sample" class="btn btn--quiet" type="button">Sample town</button>
+              <button id="course-city" class="btn btn--quiet" type="button">Course city</button>
+              <button id="clear" class="btn btn--quiet btn--span" type="button">Clear the map</button>
+            </div>
+            <details class="osm">
+              <summary>Use a real city from OpenStreetMap</summary>
+              <ol>
+                <li>Open <a href="https://overpass-turbo.eu" target="_blank" rel="noopener">overpass-turbo.eu</a> and frame a few blocks.</li>
+                <li>Paste this query and run it.</li>
+                <li>Export as raw OSM data (JSON), then Import. Course .world saves import too.</li>
+              </ol>
+              <pre id="overpass-query" tabindex="0"></pre>
+              <button id="copy-query" class="btn btn--quiet" type="button">Copy query</button>
+            </details>
+          </div>
+        </details>
+      </section>
+
+      <p id="status" class="status" role="status" aria-live="polite">Sample town loaded. Pick a tool, or press Train the cars.</p>
     </div>
     <script type="module" src="/src/world/main.ts"></script>
   </body>
