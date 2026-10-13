@@ -14,14 +14,19 @@ export class Navigator {
   private destSegment: number;
   private index: Map<string, number>;
 
-  constructor(private graph: Graph, public destination: Point) {
+  /**
+   * `closed` lists segments shut for road works: the route never uses them, and a car is never
+   * matched to one.
+   */
+  constructor(private graph: Graph, public destination: Point, private closed: ReadonlySet<number> = new Set()) {
     const n = graph.points.length;
     this.dist = new Array(n).fill(Infinity);
     this.next = new Array(n).fill(-2);
     this.destSegment = this.nearestSegment(destination);
     this.index = new Map(graph.points.map((p, i) => [`${p.x},${p.y}`, i]));
     const adj: { to: number; len: number }[][] = graph.points.map(() => []);
-    for (const s of graph.segments) {
+    for (const [si, s] of graph.segments.entries()) {
+      if (closed.has(si)) continue;
       const a = this.index.get(`${s.p1.x},${s.p1.y}`);
       const b = this.index.get(`${s.p2.x},${s.p2.y}`);
       if (a === undefined || b === undefined) continue;
@@ -62,6 +67,7 @@ export class Navigator {
     let best = -1;
     let bestD = Infinity;
     this.graph.segments.forEach((s, i) => {
+      if (this.closed.has(i)) return;
       const d = s.distanceToPoint(p);
       if (d < bestD) {
         bestD = d;
@@ -115,6 +121,25 @@ export class Navigator {
       out.push(this.graph.points[i]);
     }
     out.push(this.destination);
+    return out;
+  }
+
+  /**
+   * The whole streets (graph segments) the route from `p` drives along, in order. The partial
+   * streets at either end, where the car starts and where the destination is, are left out.
+   */
+  routeSegments(p: Point): number[] {
+    const pts = this.path(p).slice(1, -1);
+    const bySpan = new Map<string, number>();
+    this.graph.segments.forEach((s, i) => {
+      bySpan.set(`${s.p1.x},${s.p1.y}|${s.p2.x},${s.p2.y}`, i);
+      bySpan.set(`${s.p2.x},${s.p2.y}|${s.p1.x},${s.p1.y}`, i);
+    });
+    const out: number[] = [];
+    for (let i = 1; i < pts.length; i++) {
+      const si = bySpan.get(`${pts[i - 1].x},${pts[i - 1].y}|${pts[i].x},${pts[i].y}`);
+      if (si !== undefined) out.push(si);
+    }
     return out;
   }
 

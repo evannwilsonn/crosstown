@@ -5,9 +5,10 @@ import type { MarkingType } from "./markings";
 import { drawMinimap } from "./minimap";
 import { isOsmData, OVERPASS_QUERY, parseOsm } from "./osm";
 import { sampleWorld } from "./sample";
-import { SURVIVE_FRAMES, WORLD_INPUTS, WorldSim, type WorldSaved } from "./sim";
+import { SURVIVE_FRAMES, WORLD_INPUTS, WorldSim, worldLevelSpec, type WorldSaved } from "./sim";
+import { drawClosures, drawGround, drawHeadlights, drawLamps, drawSea, drawTint } from "./scenery";
 import { generateMap } from "./mapgen";
-import { WORLD_THEMES, type WorldThemeName } from "./worldThemes";
+import { themeAt, WORLD_THEMES, type TimeOfDay, type WorldThemeName } from "./worldThemes";
 import { MAX_SHARE_BYTES, startSharing, type Sharing } from "./share";
 import { drawLearningCurve } from "../chart";
 import { Genome } from "../neat";
@@ -129,6 +130,7 @@ type MapSource = "osm" | "drawn";
 interface SavedWorld extends WorldJSON {
   source?: MapSource;
   theme?: WorldThemeName;
+  time?: TimeOfDay;
 }
 interface CustomSession {
   /** The level state when the visitor switched to their own map; null after Reset learning. */
@@ -147,7 +149,10 @@ let mapSource: MapSource = "drawn";
 
 function worldFrom(saved: SavedWorld): World {
   const w = World.fromJSON(saved);
-  if (saved.theme && saved.theme in WORLD_THEMES) w.theme = saved.theme;
+  if (saved.theme && saved.theme in WORLD_THEMES) {
+    w.theme = saved.theme;
+    w.time = saved.time;
+  }
   return w;
 }
 
@@ -275,7 +280,7 @@ function showLevelMap(map: number): void {
 }
 
 function currentMap(): SavedWorld {
-  return { ...world.toJSON(), source: mapSource, theme: world.theme };
+  return { ...world.toJSON(), source: mapSource, theme: world.theme, time: world.time };
 }
 
 function saveWorld(): void {
@@ -361,28 +366,6 @@ function fit(c: HTMLCanvasElement, cx: CanvasRenderingContext2D): void {
 new ResizeObserver(() => fit(canvas, ctx)).observe(canvas);
 new ResizeObserver(() => fit(mini, miniCtx)).observe(mini);
 
-/** The coastal theme's beach and sea along the east side of town. */
-function drawSea(c: CanvasRenderingContext2D): void {
-  const xs = world.graph.points.map((p) => p.x);
-  const ys = world.graph.points.map((p) => p.y);
-  const shore = Math.max(...xs) + 230;
-  const top = Math.min(...ys) - 3000;
-  const bottom = Math.max(...ys) + 3000;
-  c.fillStyle = "#e6d3a0";
-  c.fillRect(shore, top, 160, bottom - top);
-  c.fillStyle = "#1f6f8b";
-  c.fillRect(shore + 120, top, 6000, bottom - top);
-  c.strokeStyle = "rgba(255,255,255,0.35)";
-  c.lineWidth = 3;
-  for (let y = top; y < bottom; y += 90) {
-    const x = shore + 170 + (Math.abs(Math.round(y)) % 5) * 60;
-    c.beginPath();
-    c.moveTo(x, y);
-    c.quadraticCurveTo(x + 18, y - 8, x + 36, y);
-    c.stroke();
-  }
-}
-
 /* Render loop */
 const meters = (px: number) => `${Math.round(px / PX_PER_METER).toLocaleString()} m`;
 let lastStats = 0;
@@ -408,17 +391,25 @@ function frame(nowMs: number): void {
 
   const w = canvas.clientWidth;
   const h = canvas.clientHeight;
-  const theme = world.theme ? WORLD_THEMES[world.theme] : null;
+  const theme = world.theme ? themeAt(world.theme, world.time) : null;
   ctx.fillStyle = theme?.ground ?? ground;
   ctx.fillRect(0, 0, w, h);
   ctx.save();
   viewport.apply(ctx);
   const viewPoint = viewport.center;
   const radius = viewport.viewRadius;
-  if (theme?.sea) drawSea(ctx);
-  const themed = theme ? { ...paint, road: theme.road, items: theme.items } : paint;
+  const view = { center: viewPoint, radius };
+  if (theme) {
+    drawGround(ctx, theme, world, view);
+    drawSea(ctx, theme, world);
+  }
+  const themed = theme ? { ...paint, ...theme.marking, road: theme.road, items: theme.items } : paint;
   world.draw(ctx, viewPoint, radius, themed, sim.mode === "off");
+  if (theme) drawTint(ctx, theme, view);
+  if (sim.mode !== "off") drawClosures(ctx, world, sim.closed, sim.barriers, { orange: paint.orange, white: paint.white });
+  if (theme) drawLamps(ctx, theme, world, view);
   if (sim.mode !== "off" && sim.levelSpec.goal !== "survive") drawTrip();
+  if (theme) drawHeadlights(ctx, theme, sim.cars, sim.followed);
 
   ctx.globalAlpha = 0.2;
   for (const car of sim.cars) if (car !== sim.followed) car.draw(ctx, car.damaged ? paint.items.wallEdge : paint.white);
@@ -498,19 +489,27 @@ function describeLevel(): string {
     const where = world.markings.some((m) => m.type === "target") ? "your Target marking" : "the farthest road (add a Target marking to choose)";
     return `Your map: drive from the Start marking to ${where} before the clock runs out. What the cars learn here stays here; the level brains wait for you.`;
   }
-  const what =
-    spec.goal === "survive"
-      ? "keep a car on the road for 45 seconds, covering at least 300 m. Circling in place doesn't count."
-      : `reach a random destination before the clock runs out, ${sim.tripsPerGeneration} trips a generation. A GPS input points the way; the brain does all the steering. Clear it by arriving in time on every trip.`;
-  return `Level ${spec.number}, ${spec.name}: ${what}`;
+  const trips = "Three trips from the Start marking to the same target, the red pin, each on the clock; clear it by arriving in time on all three. The GPS points the way; the brain does all the steering.";
+  const what: Record<typeof spec.stage, string> = {
+    survive: "keep a car on the road for 45 seconds, covering at least 300 m. Circling in place doesn't count.",
+    easy: spec.map === 0 ? `a first target, close by, on a relaxed clock. ${trips}` : `new streets to learn, so the target is close and the clock relaxed. ${trips}`,
+    far: `the target is farther away. ${trips}`,
+    tight: `the target is close again, but the clock is tighter. ${trips}`,
+    detour: `on trips 2 and 3, roads on the way there close (orange barricades), so every trip needs a different route. ${trips}`,
+    stack: spec.closures
+      ? `a far target, a tight clock and road closures, all at once. Clear this and the town changes. ${trips}`
+      : `a far target and a tight clock together. Clear this and the town changes. ${trips}`,
+  };
+  const town = levelMapShown && world.theme ? ` (${themeAt(world.theme, world.time).name})` : spec.map === 0 ? " (sample town)" : "";
+  return `Level ${spec.number}${town}, ${spec.name}: ${what[spec.stage]}`;
 }
 
 function describeGeneration(): string {
   const s = sim.last;
   if (!s) return describeLevel();
   if (s.levelUp) {
-    const newMap = sim.levelSpec.map !== Math.floor((s.level - 1) / 3);
-    const where = newMap ? ` New map: ${world.theme ? WORLD_THEMES[world.theme].name : "the sample town"}, built fresh for this session.` : "";
+    const newMap = sim.levelSpec.map !== worldLevelSpec(s.level).map;
+    const where = newMap ? ` New town: ${world.theme ? themeAt(world.theme, world.time).name : "the sample town"}, built fresh for this session.` : "";
     return `Generation ${s.generation} cleared level ${s.level}.${where} ${describeLevel()}`;
   }
   const arrived = sim.custom

@@ -11,28 +11,41 @@ import type { World } from "./world";
 export type WorldDriveMode = "off" | "AI" | "KEYS";
 
 /**
- * The world's levels never run out. Level 1 is the course's challenge: stay on the road. Every
- * level after it is timed trips to random destinations: each trip has a time limit worked out
- * from its own route (the ideal time at top speed, plus time for each turn, stop sign and
- * traffic light), times a factor that shrinks level by level but never below what is drivable.
- * Trips get longer and later levels start from random spots too. Every three levels the map
- * changes; a new map starts a little easier, like a new road on the highway.
+ * The world's levels never run out, and they add one challenge at a time.
+ *
+ * Every town has five levels. The first is easy, so the brains learn the new streets: a close
+ * target on a relaxed clock. The next three each add one challenge on its own (a farther
+ * target, a tighter clock, then road closures that force a detour) and the fifth stacks them
+ * all. Then the town changes, and the next town's base is a notch harder. The sample town comes
+ * first; its first level is the course's challenge, staying on the road, and road closures wait
+ * for the second town.
+ *
+ * Each level picks its target at random, once, and keeps it until the level is cleared: every
+ * generation faces the same test. Every trip starts from the town's Start marking. Time limits
+ * come from each trip's own route (top speed plus an allowance for each turn, stop sign and
+ * light), times the level's factor, which never drops below what is drivable.
  */
+export type WorldStage = "survive" | "easy" | "far" | "tight" | "detour" | "stack";
+
 export interface WorldLevel {
   number: number;
   name: string;
-  /** Which map the level is on: a new one every LEVELS_PER_MAP levels. */
+  /** Which town the level is in: 0 is the sample town. */
   map: number;
+  stage: WorldStage;
   /** "survive": still driving at the time limit. "every": arrive in time on every trip of a generation. */
   goal: "survive" | "every";
-  /** Shortest trip by road, in px (shorter if the map is small). */
+  /** Shortest trip by road, in px (shorter if the town is small). */
   minTrip: number;
   /** Time limit as a multiple of the trip's ideal time. */
   timeFactor: number;
-  randomStart: boolean;
+  /** Streets closed on each trip after the first, on top of the earlier trips' closures. */
+  closures: number;
 }
 
-export const LEVELS_PER_MAP = 3;
+export const LEVELS_PER_MAP = 5;
+const TOWN_STAGES: WorldStage[] = ["easy", "far", "tight", "detour", "stack"];
+const SAMPLE_STAGES: WorldStage[] = ["survive", "easy", "far", "tight", "stack"];
 
 /**
  * Training on a map the visitor drew or imported: one timed trip a generation from their Start
@@ -43,33 +56,44 @@ export const CUSTOM_LEVEL: WorldLevel = {
   number: 0,
   name: "Your map",
   map: -1,
+  stage: "easy",
   goal: "every",
   minTrip: 0,
   timeFactor: 2,
-  randomStart: false,
+  closures: 0,
 };
 /** The tightest clock: 30% over the ideal time, plus the allowances, stays drivable. */
 const MIN_TIME_FACTOR = 1.3;
-const DISTANCE_NAMES = ["Around the block", "Short trips", "Across the neighborhood", "Across town", "Long trips", "Cross-town runs"];
+
+/** The first level number in a town. */
+export function firstLevelOf(map: number): number {
+  return map * LEVELS_PER_MAP + 1;
+}
 
 export function worldLevelSpec(n: number): WorldLevel {
-  const map = Math.floor((n - 1) / LEVELS_PER_MAP);
-  if (n <= 1) return { number: 1, name: "Stay on the road for 45 s", map: 0, goal: "survive", minTrip: 0, timeFactor: 3, randomStart: false };
-  const stage = (n - 1) % LEVELS_PER_MAP;
-  const tier = Math.max(0, map + stage - 1);
-  const timeFactor = Math.max(MIN_TIME_FACTOR, 2.4 - 0.1 * tier);
-  const clock = timeFactor >= 2.1 ? "easy clock" : timeFactor >= 1.8 ? "on schedule" : timeFactor >= 1.5 ? "tight clock" : "rush";
-  const where = DISTANCE_NAMES[Math.min(tier, DISTANCE_NAMES.length - 1)];
-  const randomStart = tier >= 2;
-  return {
-    number: n,
-    name: `${where}, ${clock}${randomStart ? ", any start" : ""}`,
-    map,
-    goal: "every",
-    minTrip: 450 + 120 * tier,
-    timeFactor,
-    randomStart,
-  };
+  const level = Math.max(1, Math.floor(n));
+  const map = Math.floor((level - 1) / LEVELS_PER_MAP);
+  const stage = (map === 0 ? SAMPLE_STAGES : TOWN_STAGES)[(level - 1) % LEVELS_PER_MAP];
+  if (stage === "survive") {
+    return { number: level, name: "Stay on the road for 45 s", map, stage, goal: "survive", minTrip: 0, timeFactor: 3, closures: 0 };
+  }
+  // Each town's base is a notch harder than the last one's.
+  const near = 500 + 80 * map;
+  const far = Math.round(near * 1.9);
+  const easy = Math.max(1.6, 2.4 - 0.08 * map);
+  const tight = Math.max(MIN_TIME_FACTOR, easy - 0.45);
+  const closures = map === 0 ? 0 : Math.min(3, 1 + Math.floor((map - 1) / 3));
+  const spec = (name: string, minTrip: number, timeFactor: number, detours: number): WorldLevel => ({
+    number: level, name, map, stage, goal: "every", minTrip, timeFactor, closures: detours,
+  });
+  const roads = closures === 1 ? "a road closes" : `${closures} roads close`;
+  switch (stage) {
+    case "easy": return spec(map === 0 ? "A short trip" : "New streets, a short trip", near, easy, 0);
+    case "far": return spec("Farther away", far, easy, 0);
+    case "tight": return spec("Beat a tighter clock", near, tight, 0);
+    case "detour": return spec(`Detours: ${roads} each trip`, near, easy, closures);
+    default: return spec(map === 0 ? "Far and fast" : "Everything at once", far, tight, closures);
+  }
 }
 
 /**
@@ -103,6 +127,8 @@ export interface WorldSummary extends CurvePoint {
 export interface WorldSaved {
   /** This session's seed: which towns the level maps generate. */
   seed?: number;
+  /** Which targets and closures the levels pick; Reset learning rolls a new one. */
+  targetSeed?: number;
   neat: NeatJSON;
   level: number;
   generation: number;
@@ -127,6 +153,8 @@ const ARRIVE_RADIUS = 40;
 /** Cars may wait this long without progress, enough for a full red light. */
 const CAR_STALL_FRAMES = 600;
 const SENSOR_REACH = 220;
+/** Streets shorter than this are never closed: there'd be no room for the barricades. */
+const MIN_CLOSED_LENGTH = 240;
 /** A car that hasn't made progress for this long (1 s) isn't followed while others are moving. */
 const FOLLOW_IDLE_FRAMES = 60;
 
@@ -180,6 +208,12 @@ export class WorldSim {
   frames = 0;
   /** This session's seed for generated maps. */
   seed = (Math.random() * 2 ** 32) >>> 0;
+  /** This session's seed for each level's target and road closures. */
+  targetSeed = (Math.random() * 2 ** 32) >>> 0;
+  /** Streets closed on the trip under way, and the barricades across them. */
+  closed: ReadonlySet<number> = new Set();
+  barriers: Point[][] = [];
+  private plan: { world: World; level: number; targetSeed: number; target: Point | null; closed: Set<number>[] } | null = null;
   /** Called when a level starts on a different map, so the page can load it before cars spawn. */
   onMapChange?: (map: number) => void;
   private currentMap = 0;
@@ -212,6 +246,8 @@ export class WorldSim {
     this.neat.rates.power = this.mutation * 5;
     this.level = Math.max(1, saved.level);
     if (saved.seed !== undefined) this.seed = saved.seed;
+    if (saved.targetSeed !== undefined) this.targetSeed = saved.targetSeed;
+    this.plan = null;
     this.currentMap = worldLevelSpec(this.level).map;
     this.generation = saved.generation;
     this.history = saved.history ?? [];
@@ -265,40 +301,127 @@ export class WorldSim {
   }
 
   /**
-   * Where this trip starts and drives to: from the Start marking (or, on later levels, a random
-   * spot) to a random spot at least the level's trip length away by road. On a small map the
-   * trip length is capped to what the map can offer.
+   * Where this trip starts and drives to: always from the Start marking, to the level's target,
+   * with the level's road closures for this trip. Your own map uses your Target marking.
    */
   private chooseTrip(): void {
-    const w = this.world();
-    const spec = this.levelSpec;
-    const rand = mulberry32((this.generation * 7919 + this.level * 31 + this.trip * 104729) >>> 0);
     const marking = this.start!;
+    this.origin = { center: marking.center, direction: marking.direction };
     if (this.custom) {
-      this.origin = { center: marking.center, direction: marking.direction };
       this.destination = this.customDestination(this.origin.center);
+      this.setClosed(new Set());
       return;
     }
-    this.origin = spec.randomStart ? this.randomRoadSpot(rand) : { center: marking.center, direction: marking.direction };
-    const from = new Navigator(w.graph, this.origin.center);
+    const plan = this.levelPlan();
+    this.destination = plan.target;
+    this.setClosed(plan.closed[Math.min(this.trip, plan.closed.length - 1)]);
+  }
+
+  /**
+   * The level's test, picked once and kept until the level is cleared: a random target at least
+   * the level's trip length away by road, and for detour levels, the streets each trip closes.
+   * Trip 2 closes streets on the route trip 1 would take; trip 3 keeps those and closes more on
+   * trip 2's route, so every trip needs a different way there. A street is only closed if the
+   * target stays reachable. The same seed, town and level always give the same plan, so a
+   * refresh keeps it.
+   */
+  levelPlan(): { target: Point | null; closed: Set<number>[] } {
+    const w = this.world();
+    const p = this.plan;
+    if (p && p.world === w && p.level === this.level && p.targetSeed === this.targetSeed) return p;
+    const spec = this.levelSpec;
+    const rand = mulberry32((this.targetSeed ^ Math.imul(this.level, 0x9e3779b1)) >>> 0);
+    const start = this.start!.center;
+    const from = new Navigator(w.graph, start);
+    const startSeg = from.nearestSegment(start);
     let reach = 0;
     w.graph.points.forEach((_, i) => {
       const d = from.distanceFrom(i);
       if (d < Infinity && d > reach) reach = d;
     });
-    const want = Math.min(spec.minTrip, reach * 0.6);
-    let best: { p: Point; d: number } | null = null;
-    for (let tries = 0; tries < 40; tries++) {
-      const p = this.randomRoadSpot(rand).center;
-      const d = from.remaining(p);
-      if (d === Infinity) continue;
-      if (d >= want) {
-        best = { p, d };
-        break;
-      }
-      if (!best || d > best.d) best = { p, d };
+    // On a small town, the trip is capped to what the town can offer.
+    const want = Math.min(spec.minTrip, reach * 0.8);
+    const spots: { p: Point; d: number }[] = [];
+    for (let tries = 0; tries < 160; tries++) {
+      const spot = this.randomRoadSpot(rand).center;
+      if (from.nearestSegment(spot) === startSeg) continue;
+      const d = from.remaining(spot);
+      if (d < Infinity) spots.push({ p: spot, d });
     }
-    this.destination = best?.p ?? null;
+    // Prefer targets just past the level's distance: far enough, but not across the town.
+    spots.sort((a, b) => (a.d >= want) !== (b.d >= want) ? (a.d >= want ? -1 : 1) : a.d >= want ? a.d - b.d : b.d - a.d);
+    const closuresFor = (target: Point): Set<number>[] => {
+      const destSeg = new Navigator(w.graph, target).nearestSegment(target);
+      // A detour should cost a few blocks, not send the car across town.
+      const direct = new Navigator(w.graph, target).remaining(start);
+      const cap = Math.max(direct * 1.6, direct + 900);
+      const closed: Set<number>[] = [new Set()];
+      let current = new Set<number>();
+      for (let trip = 1; trip < TRIPS_PER_GENERATION; trip++) {
+        for (let k = 0; k < spec.closures; k++) {
+          const route = new Navigator(w.graph, target, current).routeSegments(start);
+          const options = route.filter((si) => {
+            const seg = w.graph.segments[si];
+            return si !== startSeg && si !== destSeg && !current.has(si) && distance(seg.p1, seg.p2) >= MIN_CLOSED_LENGTH;
+          });
+          // Shuffle, then take the first closure that still leaves a way through.
+          for (let i = options.length - 1; i > 0; i--) {
+            const j = Math.floor(rand() * (i + 1));
+            [options[i], options[j]] = [options[j], options[i]];
+          }
+          let shortest: { set: Set<number>; d: number } | null = null;
+          let chosen: Set<number> | null = null;
+          for (const si of options) {
+            const trial = new Set(current).add(si);
+            const d = new Navigator(w.graph, target, trial).remaining(start);
+            if (d === Infinity) continue;
+            if (d <= cap) {
+              chosen = trial;
+              break;
+            }
+            if (!shortest || d < shortest.d) shortest = { set: trial, d };
+          }
+          // Nothing within the cap: close the street that adds the least.
+          const next = chosen ?? shortest?.set;
+          if (next) current = next;
+        }
+        closed.push(new Set(current));
+      }
+      return closed;
+    };
+    let target: Point | null = spots[0]?.p ?? null;
+    let closed: Set<number>[] = [new Set()];
+    if (spec.closures > 0) {
+      // A detour needs a route with a street that can close and still leave a way round:
+      // take the first target, in order of preference, where every later trip gets its closures.
+      for (const spot of spots.slice(0, 25)) {
+        const plan = closuresFor(spot.p);
+        const full = plan.every((c, t) => t === 0 || c.size >= t * spec.closures);
+        if (full || spot === spots[0]) {
+          target = spot.p;
+          closed = plan;
+        }
+        if (full) break;
+      }
+    }
+    this.plan = { world: w, level: this.level, targetSeed: this.targetSeed, target, closed };
+    return this.plan;
+  }
+
+  /** Closes these streets for the trip, with a barricade across each end that the sensors see. */
+  private setClosed(closed: ReadonlySet<number>): void {
+    const w = this.world();
+    this.closed = closed;
+    const width = w.settings.roadWidth;
+    this.barriers = [...closed].flatMap((si) => {
+      const s = w.graph.segments[si];
+      const len = distance(s.p1, s.p2);
+      const dir = normalize(subtract(s.p2, s.p1));
+      const across = scale(rightOf(dir), width / 2);
+      // Set back from each junction so the crossing street stays clear.
+      const inset = Math.min(len * 0.3, width / 2 + 35);
+      return [lerp2D(s.p1, s.p2, inset / len), lerp2D(s.p1, s.p2, 1 - inset / len)].map((c) => [add(c, across), subtract(c, across)]);
+    });
   }
 
   /** The visitor's Target marking, or without one the road point farthest from the start. */
@@ -348,7 +471,7 @@ export class WorldSim {
     const w = this.world();
     this.chooseTrip();
     const start = this.origin!;
-    this.nav = this.destination ? new Navigator(w.graph, this.destination) : null;
+    this.nav = this.destination ? new Navigator(w.graph, this.destination, this.closed) : null;
     this.startRemaining = this.nav ? this.nav.remaining(start.center) : 0;
     this.timeLimit = this.nav && this.levelSpec.goal !== "survive" ? this.timeLimitFor(this.nav, start.center) : null;
     const heading = Math.atan2(-start.direction.x, -start.direction.y);
@@ -446,7 +569,7 @@ export class WorldSim {
     this.clock++;
     const world = this.world();
     world.updateLights(this.clock / 60);
-    const obstacles = world.obstacles();
+    const obstacles = this.barriers.length ? world.obstacles().concat(this.barriers) : world.obstacles();
     const nav = this.nav;
 
     this.cars.forEach((car, i) => {
@@ -565,6 +688,9 @@ export class WorldSim {
   }
 
   forget(): void {
+    // A fresh start picks new targets and closures too.
+    this.targetSeed = (Math.random() * 2 ** 32) >>> 0;
+    this.plan = null;
     this.neat = new Neat(WORLD_INPUTS, OUTPUTS, this.population);
     this.neat.rates.power = this.mutation * 5;
     this.generation = 1;
@@ -577,6 +703,7 @@ export class WorldSim {
   toJSON(): WorldSaved {
     return {
       seed: this.seed,
+      targetSeed: this.targetSeed,
       neat: this.neat.toJSON(),
       level: this.level,
       generation: this.generation,

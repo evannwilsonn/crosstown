@@ -250,7 +250,7 @@ describe("world levels and navigation", () => {
     expect(sim.followed).toBe(mover);
   });
 
-  it("random-trip levels score every brain on several trips before breeding", async () => {
+  it("a level keeps one target for all three trips and every generation, from the same start", async () => {
     const { TRIPS_PER_GENERATION } = await import("../src/world/sim");
     const w = sampleWorld();
     const sim = new WorldSim(() => w);
@@ -258,13 +258,32 @@ describe("world levels and navigation", () => {
     sim.level = 3;
     sim.begin("AI");
     expect(sim.tripsPerGeneration).toBe(TRIPS_PER_GENERATION);
-    const destinations = new Set<string>();
-    while (sim.generation === 1) {
-      if (sim.destination) destinations.add(`${Math.round(sim.destination.x)},${Math.round(sim.destination.y)}`);
+    const targets = new Set<string>();
+    const starts = new Set<string>();
+    while (sim.generation <= 2) {
+      if (sim.destination) targets.add(`${Math.round(sim.destination.x)},${Math.round(sim.destination.y)}`);
+      starts.add(`${Math.round(sim.origin!.center.x)},${Math.round(sim.origin!.center.y)}`);
       sim.step();
     }
-    expect(destinations.size).toBe(TRIPS_PER_GENERATION);
-    expect(sim.last!.trips).toBe(TRIPS_PER_GENERATION);
+    expect(targets.size).toBe(1);
+    expect(starts.size).toBe(1);
+    expect(sim.history[0].trips).toBe(TRIPS_PER_GENERATION);
+  });
+
+  it("Reset learning picks new targets; a refresh keeps them", () => {
+    const w = sampleWorld();
+    const sim = new WorldSim(() => w);
+    sim.level = 3;
+    const target = sim.levelPlan().target;
+    const again = new WorldSim(() => w, sim.toJSON());
+    expect(again.levelPlan().target).toEqual(target);
+    const seeds = new Set<number>();
+    for (let i = 0; i < 5; i++) {
+      sim.forget();
+      sim.level = 3;
+      seeds.add(sim.targetSeed);
+    }
+    expect(seeds.size).toBe(5);
   });
 });
 
@@ -311,16 +330,54 @@ describe("training on the visitor's own map", () => {
 });
 
 describe("timed world levels", () => {
-  it("never run out, never tighten the clock past what is drivable, and change map every three levels", async () => {
-    const { worldLevelSpec } = await import("../src/world/sim");
-    expect(worldLevelSpec(1).goal).toBe("survive");
-    for (let n = 2; n < 120; n++) {
+  it("never run out, add one challenge per level, then stack them before the town changes", async () => {
+    const { worldLevelSpec, LEVELS_PER_MAP } = await import("../src/world/sim");
+    expect(LEVELS_PER_MAP).toBe(5);
+    expect([1, 2, 3, 4, 5].map((n) => worldLevelSpec(n).stage)).toEqual(["survive", "easy", "far", "tight", "stack"]);
+    expect([6, 7, 8, 9, 10].map((n) => worldLevelSpec(n).stage)).toEqual(["easy", "far", "tight", "detour", "stack"]);
+    for (let n = 1; n < 200; n++) {
       const s = worldLevelSpec(n);
-      expect(s.goal).toBe("every");
+      expect(s.map).toBe(Math.floor((n - 1) / 5));
       expect(s.timeFactor).toBeGreaterThanOrEqual(1.3);
-      expect(s.map).toBe(Math.floor((n - 1) / 3));
+      if (n === 1) continue;
+      const easy = worldLevelSpec(s.map * 5 + (s.map === 0 ? 2 : 1));
+      // Each challenge level changes exactly one thing from the town's easy level.
+      if (s.stage === "far") expect([s.minTrip > easy.minTrip, s.timeFactor === easy.timeFactor, s.closures === 0]).toEqual([true, true, true]);
+      if (s.stage === "tight") expect([s.minTrip === easy.minTrip, s.timeFactor < easy.timeFactor, s.closures === 0]).toEqual([true, true, true]);
+      if (s.stage === "detour") expect([s.minTrip === easy.minTrip, s.timeFactor === easy.timeFactor, s.closures > 0]).toEqual([true, true, true]);
+      if (s.stage === "stack") expect([s.minTrip > easy.minTrip, s.timeFactor < easy.timeFactor]).toEqual([true, true]);
     }
-    expect(worldLevelSpec(60).minTrip).toBeGreaterThan(worldLevelSpec(5).minTrip);
+    // No detours in the sample town; they start in the second town.
+    expect([1, 2, 3, 4, 5].every((n) => worldLevelSpec(n).closures === 0)).toBe(true);
+    expect(worldLevelSpec(9).closures).toBe(1);
+    expect(worldLevelSpec(60).minTrip).toBeGreaterThan(worldLevelSpec(7).minTrip);
+  });
+
+  it("detour levels close a street on each later trip's route, keep earlier closures, and stay reachable", async () => {
+    const { generateMap } = await import("../src/world/mapgen");
+    const { Navigator } = await import("../src/world/nav");
+    for (const seed of [3, 4, 5]) {
+      const w = generateMap(1, seed);
+      const sim = new WorldSim(() => w);
+      sim.level = 9;
+      expect(sim.levelSpec.stage).toBe("detour");
+      const plan = sim.levelPlan();
+      const start = w.markings.find((m) => m.type === "start")!.center;
+      expect(plan.closed[0].size).toBe(0);
+      for (let t = 1; t < plan.closed.length; t++) {
+        expect(plan.closed[t].size).toBeGreaterThan(plan.closed[t - 1].size);
+        for (const si of plan.closed[t - 1]) expect(plan.closed[t].has(si)).toBe(true);
+        const before = new Navigator(w.graph, plan.target!, plan.closed[t - 1]).routeSegments(start);
+        // Something on the previous trip's route is now closed: the route has to change.
+        expect(before.some((si) => plan.closed[t].has(si))).toBe(true);
+        expect(new Navigator(w.graph, plan.target!, plan.closed[t]).remaining(start)).toBeLessThan(Infinity);
+      }
+      // Barricades are walls the sensors see.
+      sim.population = 2;
+      sim.begin("AI");
+      sim.nextGeneration();
+      expect(sim.barriers.length).toBe(0);
+    }
   });
 
   it("gives every trip a time limit longer than driving its route flat out", async () => {
@@ -338,10 +395,21 @@ describe("timed world levels", () => {
 });
 
 describe("generated level maps", () => {
+  it("never look alike two towns in a row, and the first five are all different", async () => {
+    const { townLook } = await import("../src/world/worldThemes");
+    const looks = Array.from({ length: 40 }, (_, i) => townLook(i + 1));
+    expect(new Set(looks.slice(0, 5).map((l) => l.theme)).size).toBe(5);
+    for (let i = 1; i < looks.length; i++) {
+      expect(looks[i].theme === looks[i - 1].theme && looks[i].time === looks[i - 1].time).toBe(false);
+    }
+    expect(looks[5].time).toBe("dusk");
+    expect(looks[10].time).toBe("night");
+  });
+
   it("are connected both ways (one-way streets included), themed, and marked", async () => {
     const { generateMap, stronglyConnected } = await import("../src/world/mapgen");
     for (const seed of [11, 22]) {
-      for (let m = 1; m <= 6; m++) {
+      for (let m = 1; m <= 8; m++) {
         const w = generateMap(m, seed);
         expect(w.theme).toBeDefined();
         const pts = w.graph.points;
@@ -351,7 +419,7 @@ describe("generated level maps", () => {
         expect(w.markings.filter((k) => k.type === "start")).toHaveLength(1);
       }
     }
-  });
+  }, 60_000);
 
   it("GPS never routes the wrong way down a one-way street", async () => {
     const { Navigator } = await import("../src/world/nav");

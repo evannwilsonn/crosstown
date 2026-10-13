@@ -62,28 +62,39 @@ The world builds a town around a road network: road borders, buildings and trees
 
 **Inputs:** the seven rays and speed, plus GPS. The GPS input is the angle to the next turn on the shortest legal road route to the destination (`world/nav.ts`: Dijkstra over the road graph, respecting one-way streets). Navigation never steers. The brain has to learn to follow the arrow and stay on the road at the same time.
 
-**Levels never run out:**
+**Levels never run out, and they add one challenge at a time.** Every town has five levels: an easy one to learn the new streets, then one level per challenge on its own, then a level that stacks them all. Then the town changes, and the next town's base is a notch harder (`worldLevelSpec` in `world/sim.ts`).
 
-1. **Stay on the road for 45 s.** Fitness is distance driven, as in the course. Cleared when a car is still driving at 45 s and has covered at least 300 m away from the start, so circling in place doesn't count.
+| Levels | Town | What each level asks |
+| --- | --- | --- |
+| 1-5 | Sample town | 1. Stay on the road for 45 s · 2. A close target, relaxed clock · 3. Farther away · 4. Tighter clock · 5. Far and fast |
+| 6-10 | Downtown | 6. New streets, close target · 7. Farther · 8. Tighter clock · 9. Detours · 10. Everything at once |
+| 11+ | A new town every five levels | The same five steps, each town a notch harder: longer trips, tighter clocks (never below 1.3× the ideal time), and more road closures per trip (1, then 2, then 3) |
 
-The camera and the highlighted car follow the best car still moving (a car stopped in place for over a second is skipped while others drive); a crashed or stopped leader still scores and breeds, it just isn't followed.
-2. **Every level after that is timed trips.** Each generation drives three trips to random destinations. A level is cleared when one brain arrives in time on all three. One random trip per generation turned out to be luck: champions were picked on easy trips.
+1. **Staying on the road (level 1)** is the course's challenge. Fitness is distance driven. It's cleared when a car is still driving at 45 s and has covered at least 300 m away from the start, so circling in place doesn't count.
+2. **Every other level is three timed trips** from the town's Start marking to the same target, the red pin. A level picks its target at random once and keeps it until the level is cleared, so every generation faces the same test. A level is cleared when one brain arrives in time on all three trips. Reset learning picks new targets; a refresh keeps them.
+3. **Detours.** On detour levels, trip 2 closes a street on the route trip 1 would take, and trip 3 keeps that closure and closes another on trip 2's route. Every trip needs a different way to the same target. Closed streets get orange barricades that the sensors see as walls, and the GPS routes around them. A street is only closed if the target stays reachable and the detour stays reasonable (at most about 1.6 times the direct route, or 90 m more).
 
-**Fair time limits.** Each trip's limit is worked out from its own route: the ideal time at top speed, plus time for each turn, stop sign and traffic light. That total is multiplied by a factor that shrinks level by level but never goes below 1.3, which stays drivable. Later levels make trips longer and start from random spots. Destinations are never moved closer to make a level easier.
+**Fair time limits.** Each trip's limit is worked out from its own route, closures included: the ideal time at top speed, plus time for each turn, stop sign and traffic light, times the level's factor. A longer detour gets more time.
 
 **Scoring per trip:** the share of the route covered, plus a bonus for arriving in time that grows with the time to spare. Every trip counts the same, however long it is.
 
-**New towns.** Map 1 is the sample town. Every three levels a new town is generated for the session from a recipe that grows harder (`world/mapgen.ts`):
+The camera and the highlighted car follow the best car that is still moving. A car stopped in place for over a second is skipped while others drive. A crashed or stopped leader still scores and breeds; it just isn't followed.
 
-| Map | Recipe |
-| --- | --- |
-| 2 | Downtown: a regular grid with tall flat-roofed buildings |
-| 3 | Desert town: bent and missing streets, diagonal shortcuts |
-| 4 | Snowy town: adds one-way streets |
-| 5 | Coastal town, with a beach and the sea |
-| 6+ | Bigger towns, up to 8 by 8 blocks, in random themes |
+**Every town looks different.** Towns are generated fresh each session (`world/mapgen.ts`), and each brings its own street feature and its own look (`world/worldThemes.ts`, `world/items.ts`, `world/scenery.ts`):
 
-Every generated town is checked to be connected both ways, one-way streets included. Traffic lights ramp in map by map. Red lights are walls for the sensors; yellow is not. Yellow lights crushed cars that were already in the junction, so this is a deliberate difference from the course. The lights run on the simulation's clock, so they keep pace at Max speed.
+| Town | Streets | Look |
+| --- | --- | --- |
+| Downtown | A regular grid, the first traffic lights | Tall flat-roofed towers with window rows and rooftop units, concrete plazas, a few street trees |
+| Desert town | Bent and missing streets, diagonal shortcuts | Low adobe blocks with parapets, sand with wind ripples and pebbles, saguaro cacti |
+| Snowy town | Adds one-way streets | Brick and timber houses with snowy roofs and lit windows, snow-tipped pines |
+| Coastal town | Bigger | White houses with blue roofs, a beach and the sea |
+| Autumn suburb | Bigger still, up to 8 by 8 blocks | Brick and clapboard houses, orange, red and gold trees, fallen leaves |
+| Towns 6-10 | Keep growing | The same five at dusk: warm light, lamps coming on, headlights |
+| Towns 11-15 | Keep growing | The same five at night: lit windows, street lamps at every junction, headlights |
+
+After that the cycle repeats, and two towns in a row never look alike. Buildings line both sides of every street. The course's method only follows the town's outline, which leaves the inside of big blocks empty.
+
+Every generated town is checked to be connected both ways, one-way streets included. Traffic lights ramp in town by town. Red lights are walls for the sensors; yellow is not. Yellow lights crushed cars that were already in the junction, so this is a deliberate difference from the course. The lights run on the simulation's clock, so they keep pace at Max speed.
 
 `npx tsx scripts/train-world.ts [generations] [cars] [mutation] [start level]` runs the world headless, swapping maps as levels clear. In test runs, populations cleared level 2 in under 40 generations. Later levels take longer: one run cleared level 4 after about 126 generations.
 

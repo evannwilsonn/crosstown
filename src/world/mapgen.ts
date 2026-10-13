@@ -3,14 +3,15 @@ import { add, distance, normalize, rightOf, scale, Segment, subtract, type Point
 import { Graph } from "./graph";
 import { createMarking, type MarkingType } from "./markings";
 import { sampleWorld } from "./sample";
-import { World } from "./world";
-import type { WorldThemeName } from "./worldThemes";
+import { DEFAULT_SETTINGS, World } from "./world";
+import { townLook, WORLD_THEMES, type TimeOfDay, type WorldThemeName } from "./worldThemes";
 
 /**
- * Towns for the world's levels. Map 1 is the sample town. Every map after it is generated
+ * Towns for the world's levels. The sample town comes first. Every town after it is generated
  * fresh each session from a recipe that gets bigger and messier: more blocks, streets that
- * bend and run at angles, dead ends, diagonal shortcuts, one-way streets. Each map has a theme
- * (downtown, desert, snowy, coastal, then mixed) that changes how it looks, never how it drives.
+ * bend and run at angles, dead ends, diagonal shortcuts, one-way streets. Each town also has
+ * its own look (downtown, desert, snowy, coastal, autumn suburb; then the same five at dusk,
+ * then at night), so no two towns in a row look alike.
  */
 interface Recipe {
   cols: number;
@@ -27,23 +28,24 @@ interface Recipe {
   /** Share of streets that are one-way. */
   oneWay: number;
   theme: WorldThemeName;
+  time: TimeOfDay;
 }
 
-const THEMES: WorldThemeName[] = ["downtown", "desert", "snowy", "coastal"];
-
-export function recipeFor(map: number, seed: number): Recipe {
-  const named: Omit<Recipe, "theme">[] = [
+export function recipeFor(map: number, _seed = 0): Recipe {
+  const named: Omit<Recipe, "theme" | "time">[] = [
     { cols: 4, rows: 4, spacing: 480, jitter: 15, remove: 0, diagonals: 0, bends: 0, oneWay: 0 },
     { cols: 4, rows: 5, spacing: 480, jitter: 55, remove: 0.1, diagonals: 1, bends: 0.25, oneWay: 0 },
     { cols: 5, rows: 5, spacing: 470, jitter: 60, remove: 0.14, diagonals: 2, bends: 0.3, oneWay: 0.12 },
     { cols: 5, rows: 6, spacing: 470, jitter: 65, remove: 0.15, diagonals: 2, bends: 0.35, oneWay: 0.18 },
   ];
-  if (map >= 1 && map <= named.length) return { ...named[map - 1], theme: THEMES[map - 1] };
+  const look = townLook(map);
+  if (map >= 1 && map <= named.length) return { ...named[map - 1], ...look };
   // Past the named maps: towns keep growing, up to what stays smooth to simulate.
   const k = map - named.length - 1;
   const size = Math.min(8, 5 + Math.floor(k / 2));
-  const rand = mulberry32((seed ^ Math.imul(map, 0x2545f491)) >>> 0);
+
   return {
+    ...look,
     cols: size,
     rows: Math.min(8, size + 1),
     spacing: 460,
@@ -52,7 +54,6 @@ export function recipeFor(map: number, seed: number): Recipe {
     diagonals: 3,
     bends: 0.4,
     oneWay: 0.2,
-    theme: THEMES[Math.floor(rand() * THEMES.length)],
   };
 }
 
@@ -90,15 +91,20 @@ export function stronglyConnected(n: number, edges: Edge[], oneWay: boolean[]): 
 /** Builds the town for a level map. Map 0 is the sample town; the rest are generated and checked drivable. */
 export function generateMap(map: number, seed: number): World {
   if (map <= 0) return sampleWorld();
-  for (let attempt = 0; attempt < 30; attempt++) {
-    const world = tryGenerate(map, (seed + attempt * 7777) >>> 0);
+  // Most seeds work at once. Big towns with many one-way streets sometimes need more tries,
+  // and after enough misses the recipe calms down (fewer bends and one-way streets) so a
+  // town is always found.
+  for (let attempt = 0; attempt < 90; attempt++) {
+    const calm = attempt < 40 ? 1 : attempt < 70 ? 0.6 : 0.3;
+    const world = tryGenerate(map, (seed + attempt * 7777) >>> 0, calm);
     if (world) return world;
   }
   return sampleWorld();
 }
 
-function tryGenerate(map: number, seed: number): World | null {
-  const r = recipeFor(map, seed);
+function tryGenerate(map: number, seed: number, calm = 1): World | null {
+  const base = recipeFor(map, seed);
+  const r = { ...base, jitter: base.jitter * calm, bends: base.bends * calm, oneWay: base.oneWay * calm, diagonals: Math.round(base.diagonals * calm) };
   const rand = mulberry32((seed ^ Math.imul(map + 1, 0x9e3779b1)) >>> 0);
   const id = (c: number, row: number) => row * r.cols + c;
   const points: Point[] = [];
@@ -181,8 +187,11 @@ function tryGenerate(map: number, seed: number): World | null {
   }
 
   const segments = finalEdges.map(([a, b], i) => new Segment(finalPoints[a], finalPoints[b], oneWay[i]));
-  const world = new World(new Graph(finalPoints, segments));
+  const theme = WORLD_THEMES[r.theme];
+  const world = new World(new Graph(finalPoints, segments), { ...DEFAULT_SETTINGS, ...theme.settings });
   world.theme = r.theme;
+  world.time = r.time;
+  world.fill = { buildings: theme.buildingDensity, trees: theme.treeDensity, heights: theme.heights, frontage: true };
   world.generateRoads();
   placeMarkings(world, finalEdges, oneWay, rand, map);
   world.generateItems();

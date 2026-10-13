@@ -1,7 +1,7 @@
 import { mulberry32, lerp } from "../utils";
 import { add, distance, Envelope, getNearestPoint, Polygon, rightOf, samePoint, scale, Segment, type Point } from "./geom";
 import { Graph, type GraphJSON } from "./graph";
-import { Building, Tree, type ItemPaint } from "./items";
+import { Building, hash2, Tree, type ItemPaint } from "./items";
 import { createMarking, Light, markingFromJSON, type Marking, type MarkingJSON, type MarkingType, type Paint } from "./markings";
 
 /** Shape of a `.world` save from the course's editor (the file body inside `World.load(...)`). */
@@ -21,6 +21,8 @@ export interface CourseSave {
   zoom?: number;
   offset?: Point;
 }
+
+const centroid = (pts: Point[]): Point => ({ x: pts.reduce((a, p) => a + p.x, 0) / pts.length, y: pts.reduce((a, p) => a + p.y, 0) / pts.length });
 
 /** Light timing from the course: each light at an intersection gets green 2 s then yellow 1 s, in turn. */
 const GREEN_S = 2;
@@ -69,6 +71,10 @@ export class World {
   markings: Marking[] = [];
   /** Look of a generated level map; undefined keeps the page's own colors. */
   theme?: import("./worldThemes").WorldThemeName;
+  /** Time of day for a generated town that has come round again. */
+  time?: import("./worldThemes").TimeOfDay;
+  /** How a generated town fills in: share of buildings and trees kept, and building heights. */
+  fill?: { buildings?: number; trees?: number; heights?: [number, number]; frontage?: boolean };
   roadsVersion = -1;
   itemsVersion = -1;
 
@@ -155,6 +161,31 @@ export class World {
   }
 
   private generateBuildings(): Building[] {
+    const { spacing } = this.settings;
+    const bases = this.fill?.frontage ? this.frontageBases() : this.outlineBases();
+    // Two polygons whose bounding circles are this far apart can't touch: skip the exact test.
+    const reach = bases.map((b) => {
+      const c = centroid(b.points);
+      return { c, r: Math.max(...b.points.map((p) => distance(p, c))) };
+    });
+    const kept: number[] = [];
+    for (let i = 0; i < bases.length; i++) {
+      const clash = kept.some((j) => {
+        if (distance(reach[i].c, reach[j].c) > reach[i].r + reach[j].r + spacing) return false;
+        return bases[i].intersectsPoly(bases[j]) || bases[i].distanceToPoly(bases[j]) < spacing - 0.001;
+      });
+      if (!clash) kept.push(i);
+    }
+    const keep = this.fill?.buildings ?? 1;
+    const [lo, hi] = this.fill?.heights ?? [1, 1];
+    return kept
+      .map((i) => bases[i])
+      .filter((b) => hash2(b.points[0].x, b.points[0].y, 21) < keep)
+      .map((b) => new Building(b, 200 * lerp(lo, hi, hash2(b.points[0].x, b.points[0].y, 22))));
+  }
+
+  /** The course's method: lots along the outline of the envelopes around every road. */
+  private outlineBases(): Polygon[] {
     const { roadWidth, roadRoundness, buildingWidth, buildingMinLength, spacing } = this.settings;
     const around = this.graph.segments.map(
       (s) => new Envelope(s, roadWidth + buildingWidth + spacing * 2, roadRoundness),
@@ -177,16 +208,41 @@ export class World {
       }
     }
 
-    const bases = supports.map((s) => new Envelope(s, buildingWidth, 0).poly);
-    for (let i = 0; i < bases.length - 1; i++) {
-      for (let j = i + 1; j < bases.length; j++) {
-        if (bases[i].intersectsPoly(bases[j]) || bases[i].distanceToPoly(bases[j]) < spacing - 0.001) {
-          bases.splice(j, 1);
-          j--;
+    return supports.map((s) => new Envelope(s, buildingWidth, 0).poly);
+  }
+
+  /**
+   * Generated towns line both sides of every street with buildings, like a real town. (The
+   * course's method follows the town's outline, so the inside of each block stays empty once
+   * blocks are bigger than a couple of buildings.) Lots that would touch a road or reach into a
+   * crossing street are dropped.
+   */
+  private frontageBases(): Polygon[] {
+    const { roadWidth, buildingWidth, buildingMinLength, spacing } = this.settings;
+    const offset = roadWidth / 2 + spacing + buildingWidth / 2;
+    // Lots start just clear of the crossing road; where two corner lots collide, one is dropped below.
+    const trim = roadWidth / 2 + spacing / 2;
+    const bases: Polygon[] = [];
+    for (const s of this.graph.segments) {
+      const len = s.length();
+      const usable = len - 2 * trim;
+      if (usable < buildingMinLength * 0.7) continue;
+      const count = Math.max(1, Math.floor((usable + spacing) / (buildingMinLength + spacing)));
+      const lotLength = (usable + spacing) / count - spacing;
+      const dir = s.directionVector();
+      const across = rightOf(dir);
+      for (const side of [1, -1]) {
+        for (let i = 0; i < count; i++) {
+          const from = trim + i * (lotLength + spacing);
+          const a = add(add(s.p1, scale(dir, from)), scale(across, offset * side));
+          const b = add(a, scale(dir, lotLength));
+          bases.push(new Envelope(new Segment(a, b), buildingWidth, 0).poly);
         }
       }
     }
-    return bases.map((b) => new Building(b));
+    // Only roads near a lot can touch it.
+    const near = (b: Polygon, e: Envelope) => e.skeleton.distanceToPoint(centroid(b.points)) < roadWidth / 2 + buildingWidth + buildingMinLength + spacing;
+    return bases.filter((b) => !this.envelopes.some((e) => near(b, e) && (e.poly.intersectsPoly(b) || e.poly.distanceToPoly(b) < spacing / 2)));
   }
 
   private generateTrees(): Tree[] {
@@ -202,22 +258,30 @@ export class World {
     const top = Math.min(...points.map((p) => p.y));
     const bottom = Math.max(...points.map((p) => p.y));
     const blocked = [...this.buildings.map((b) => b.base), ...this.envelopes.map((e) => e.poly)];
+    // Bounding circles, so each candidate is only tested against shapes that could be near it.
+    const circles = blocked.map((poly) => {
+      const c = centroid(poly.points);
+      return { c, r: Math.max(...poly.points.map((q) => distance(q, c))) };
+    });
+    const nearby = (p: Point, within: number) => blocked.filter((_, i) => distance(p, circles[i].c) < circles[i].r + within);
 
     const trees: Tree[] = [];
     let tries = 0;
     while (tries < 100) {
       const p = { x: lerp(left, right, rng()), y: lerp(top, bottom, rng()) };
-      let keep = !blocked.some((poly) => poly.containsPoint(p) || poly.distanceToPoint(p) < treeSize / 2);
+      const close = nearby(p, treeSize * 2);
+      let keep = !close.some((poly) => poly.containsPoint(p) || poly.distanceToPoint(p) < treeSize / 2);
       if (keep) keep = !trees.some((t) => distance(t.center, p) < treeSize);
       // Keep trees near the town, not floating in empty space.
-      if (keep) keep = blocked.some((poly) => poly.distanceToPoint(p) < treeSize * 2);
+      if (keep) keep = close.some((poly) => poly.distanceToPoint(p) < treeSize * 2);
       if (keep) {
         trees.push(new Tree(p, treeSize));
         tries = 0;
       }
       tries++;
     }
-    return trees;
+    const keep = this.fill?.trees ?? 1;
+    return keep >= 1 ? trees : trees.filter((t) => hash2(t.center.x, t.center.y, 23) < keep);
   }
 
   /** Intersections are points where more than two roads meet. */
