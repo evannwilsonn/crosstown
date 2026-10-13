@@ -165,6 +165,14 @@ export class Simulation {
     this.reset();
   }
 
+  /** Breeds from this brain from now on, restarting the generation count. */
+  adopt(parent: Parent): void {
+    this.parent = parent;
+    this.generation = 1;
+    this.stagnant = 0;
+    this.reset();
+  }
+
   forget(): void {
     this.parent = null;
     this.generation = 1;

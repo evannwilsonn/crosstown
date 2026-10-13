@@ -7,6 +7,10 @@ import { drawMinimap } from "./minimap";
 import { isOsmData, OVERPASS_QUERY, parseOsm } from "./osm";
 import { sampleWorld } from "./sample";
 import { WorldSim } from "./sim";
+import pretrained from "../pretrained/world.json";
+
+/** Trained offline with scripts/train-world.ts on the sample town; drives the 45 s limit without a crash. */
+const PRETRAINED = pretrained as Parent;
 import { Viewport } from "./viewport";
 import { drawNetwork } from "../visualizer";
 import { World, type CourseSave, type WorldJSON, type WorldPaint } from "./world";
@@ -44,6 +48,7 @@ const ui = {
   driveSelf: $<HTMLButtonElement>("#drive-self"),
   stop: $<HTMLButtonElement>("#stop-driving"),
   forget: $<HTMLButtonElement>("#forget"),
+  pretrained: $<HTMLButtonElement>("#pretrained"),
   importFile: $<HTMLInputElement>("#import"),
   copyJson: $<HTMLButtonElement>("#copy-json"),
   sample: $<HTMLButtonElement>("#sample"),
@@ -334,6 +339,12 @@ ui.stop.addEventListener("click", () => {
   stopDriving();
   announce("Parked. The map is editable again.");
 });
+ui.pretrained.addEventListener("click", () => {
+  sim.adopt({ ...PRETRAINED });
+  save(PARENT_KEY, sim.parent);
+  announce("Loaded a brain trained offline on the sample town. Press Train the cars to watch it drive; on other maps it keeps learning from there.");
+});
+
 ui.forget.addEventListener("click", () => {
   sim.forget();
   save(PARENT_KEY, null);

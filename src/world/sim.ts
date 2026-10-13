@@ -121,6 +121,13 @@ export class WorldSim {
     this.spawn();
   }
 
+  /** Breeds from this brain from now on, restarting the generation count. */
+  adopt(parent: Parent): void {
+    this.parent = parent;
+    this.generation = 1;
+    if (this.mode !== "off") this.spawn();
+  }
+
   forget(): void {
     this.parent = null;
     this.generation = 1;
