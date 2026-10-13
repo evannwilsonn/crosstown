@@ -6,6 +6,8 @@ import { drawMinimap } from "./minimap";
 import { isOsmData, OVERPASS_QUERY, parseOsm } from "./osm";
 import { sampleWorld } from "./sample";
 import { WORLD_INPUTS, WorldSim, type WorldSaved } from "./sim";
+import { generateMap } from "./mapgen";
+import { WORLD_THEMES } from "./worldThemes";
 import { drawLearningCurve } from "../chart";
 import { Genome } from "../neat";
 import { Viewport } from "./viewport";
@@ -139,6 +141,8 @@ try {
 } catch {
   sim = new WorldSim(() => world);
 }
+// Every three levels the town changes; the brains carry over.
+sim.onMapChange = (map) => showLevelMap(map);
 function saveState(): void {
   save(STATE_KEY, sim.generation > 1 ? sim.toJSON() : null, "session");
 }
@@ -205,7 +209,20 @@ function regenerate(now: number): void {
   }
 }
 
+/** True while the map shown is one of the level maps rather than the visitor's own. */
+let levelMapShown = false;
+
+/** Shows the level map the simulation is on, keeping the cars and the brains. */
+function showLevelMap(map: number): void {
+  world = generateMap(map, sim.seed);
+  levelMapShown = true;
+  markingCount = world.markings.length;
+  seenVersion = world.graph.version;
+  if (!sim.leader) viewport.fit(world.graph.points);
+}
+
 function saveWorld(): void {
+  if (levelMapShown) return; // level maps are made fresh each session; only the visitor's own map is kept
   save(WORLD_KEY, { ...world.toJSON(), view: { zoom: viewport.zoom, center: viewport.center } });
 }
 
@@ -240,6 +257,28 @@ function fit(c: HTMLCanvasElement, cx: CanvasRenderingContext2D): void {
 new ResizeObserver(() => fit(canvas, ctx)).observe(canvas);
 new ResizeObserver(() => fit(mini, miniCtx)).observe(mini);
 
+/** The coastal theme's beach and sea along the east side of town. */
+function drawSea(c: CanvasRenderingContext2D): void {
+  const xs = world.graph.points.map((p) => p.x);
+  const ys = world.graph.points.map((p) => p.y);
+  const shore = Math.max(...xs) + 230;
+  const top = Math.min(...ys) - 3000;
+  const bottom = Math.max(...ys) + 3000;
+  c.fillStyle = "#e6d3a0";
+  c.fillRect(shore, top, 160, bottom - top);
+  c.fillStyle = "#1f6f8b";
+  c.fillRect(shore + 120, top, 6000, bottom - top);
+  c.strokeStyle = "rgba(255,255,255,0.35)";
+  c.lineWidth = 3;
+  for (let y = top; y < bottom; y += 90) {
+    const x = shore + 170 + (Math.abs(Math.round(y)) % 5) * 60;
+    c.beginPath();
+    c.moveTo(x, y);
+    c.quadraticCurveTo(x + 18, y - 8, x + 36, y);
+    c.stroke();
+  }
+}
+
 /* Render loop */
 const meters = (px: number) => `${Math.round(px / PX_PER_METER).toLocaleString()} m`;
 let lastStats = 0;
@@ -265,13 +304,16 @@ function frame(nowMs: number): void {
 
   const w = canvas.clientWidth;
   const h = canvas.clientHeight;
-  ctx.fillStyle = ground;
+  const theme = world.theme ? WORLD_THEMES[world.theme] : null;
+  ctx.fillStyle = theme?.ground ?? ground;
   ctx.fillRect(0, 0, w, h);
   ctx.save();
   viewport.apply(ctx);
   const viewPoint = viewport.center;
   const radius = viewport.viewRadius;
-  world.draw(ctx, viewPoint, radius, paint, sim.mode === "off");
+  if (theme?.sea) drawSea(ctx);
+  const themed = theme ? { ...paint, road: theme.road, items: theme.items } : paint;
+  world.draw(ctx, viewPoint, radius, themed, sim.mode === "off");
   if (sim.mode === "AI" && sim.level > 1) drawTrip();
 
   ctx.globalAlpha = 0.2;
@@ -282,7 +324,7 @@ function frame(nowMs: number): void {
     sim.leader.draw(ctx, crashed ? paint.items.wallEdge : paint.yellow, ui.sensors.checked ? paint.yellow : undefined);
   }
 
-  world.drawItems(ctx, viewPoint, radius, paint.items);
+  world.drawItems(ctx, viewPoint, radius, themed.items);
   // Course 2:49: editors draw at 30% so the roads stay the focus.
   ctx.globalAlpha = 0.3;
   editor?.draw(ctx, paint);
@@ -350,7 +392,11 @@ function describeLevel(): string {
 function describeGeneration(): string {
   const s = sim.last;
   if (!s) return describeLevel();
-  if (s.levelUp) return `Generation ${s.generation} cleared level ${s.level}. ${describeLevel()}`;
+  if (s.levelUp) {
+    const newMap = sim.levelSpec.map !== Math.floor((s.level - 1) / 3);
+    const where = newMap ? ` New map: ${world.theme ? WORLD_THEMES[world.theme].name : "the sample town"}, built fresh for this session.` : "";
+    return `Generation ${s.generation} cleared level ${s.level}.${where} ${describeLevel()}`;
+  }
   const arrived = s.trips > 1 ? ` Its best car arrived in time on ${s.inTime} of ${s.trips} trips.` : "";
   if (s.grew) return `Generation ${s.generation}'s best brain grew a neuron: ${s.neurons} hidden now.${arrived}`;
   return `Generation ${s.generation}: ${s.species} species competing.${arrived}`;
@@ -420,6 +466,8 @@ function setDriving(on: boolean): void {
 }
 
 function startDriving(mode: "AI" | "KEYS"): void {
+  // Training and driving happen on the level maps.
+  if (!levelMapShown || sim.levelSpec.map > 0) showLevelMap(sim.levelSpec.map);
   sim.population = Number(ui.population.value);
   sim.mutation = Number(ui.mutation.value);
   if (!sim.begin(mode)) {
@@ -562,3 +610,6 @@ requestAnimationFrame(() => {
   setTool("roads");
   requestAnimationFrame(frame);
 });
+
+// Exposed for console experiments.
+(window as unknown as { sim: WorldSim }).sim = sim;

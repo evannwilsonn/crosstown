@@ -67,7 +67,8 @@ export const TRIPS_PER_GENERATION = 3;
 /** Allowances added to a trip's ideal time, in frames. */
 const TURN_FRAMES = 45;
 const STOP_FRAMES = 80;
-const LIGHT_FRAMES = 150;
+/** A light can be red for most of its cycle; allow a typical wait at each one. */
+const LIGHT_FRAMES = 240;
 const START_FRAMES = 60;
 
 export interface WorldSummary extends CurvePoint {
@@ -85,6 +86,8 @@ export interface WorldSummary extends CurvePoint {
 }
 
 export interface WorldSaved {
+  /** This session's seed: which towns the level maps generate. */
+  seed?: number;
   neat: NeatJSON;
   level: number;
   generation: number;
@@ -143,6 +146,8 @@ export class WorldSim {
   timeLimit: number | null = null;
   /** Frames since this trip started. */
   frames = 0;
+  /** This session's seed for generated maps. */
+  seed = (Math.random() * 2 ** 32) >>> 0;
   /** Called when a level starts on a different map, so the page can load it before cars spawn. */
   onMapChange?: (map: number) => void;
   private currentMap = 0;
@@ -166,6 +171,8 @@ export class WorldSim {
     if (saved) {
       this.neat = Neat.fromJSON(saved.neat);
       this.level = Math.max(1, saved.level);
+      if (saved.seed !== undefined) this.seed = saved.seed;
+      this.currentMap = this.levelSpec.map;
       this.generation = saved.generation;
       this.history = saved.history ?? [];
       this.last = this.history[this.history.length - 1] ?? null;
@@ -211,10 +218,11 @@ export class WorldSim {
   private randomRoadSpot(rand: () => number): { center: Point; direction: Point } {
     const w = this.world();
     const s = w.graph.segments[Math.floor(rand() * w.graph.segments.length)];
-    const forward = rand() < 0.5;
+    // One-way streets only run from p1 to p2, and their traffic uses the whole road.
+    const forward = s.oneWay || rand() < 0.5;
     const [a, b] = forward ? [s.p1, s.p2] : [s.p2, s.p1];
     const dir = normalize(subtract(b, a));
-    const lane = scale(rightOf(dir), w.settings.roadWidth / 4);
+    const lane = scale(rightOf(dir), s.oneWay ? 0 : w.settings.roadWidth / 4);
     return { center: add(lerp2D(a, b, 0.25 + rand() * 0.5), lane), direction: dir };
   }
 
@@ -486,6 +494,7 @@ export class WorldSim {
 
   toJSON(): WorldSaved {
     return {
+      seed: this.seed,
       neat: this.neat.toJSON(),
       level: this.level,
       generation: this.generation,

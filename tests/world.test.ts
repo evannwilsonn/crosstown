@@ -86,7 +86,7 @@ describe("world", () => {
     expect(copy.markings.map((m) => m.type)).toEqual(w.markings.map((m) => m.type));
   });
 
-  it("gives one light per intersection the green at a time, and walls off the rest", () => {
+  it("gives one light per intersection the green at a time, and walls off the red ones", () => {
     const w = sampleWorld(); // three lights share the east intersection
     const lights = w.markings.filter((m): m is Light => m instanceof Light);
     for (let t = 0; t < 9; t++) {
@@ -94,7 +94,8 @@ describe("world", () => {
       const open = lights.filter((l) => l.state === "green" || l.state === "yellow");
       expect(open).toHaveLength(1);
       const walls = w.obstacles().length - w.roadBorders.length;
-      expect(walls).toBe(lights.length - (open[0].state === "green" ? 1 : 0));
+      // Yellow is not a wall: a car already over the line clears the junction.
+      expect(walls).toBe(lights.length - 1);
     }
   });
 
@@ -240,5 +241,32 @@ describe("timed world levels", () => {
     const nav = new Navigator(w.graph, sim.destination!);
     const flatOut = nav.remaining(sim.origin!.center) / 3; // frames at top speed, no turns or lights
     expect(sim.timeLimit!).toBeGreaterThan(flatOut * 1.3);
+  });
+});
+
+describe("generated level maps", () => {
+  it("are connected both ways (one-way streets included), themed, and marked", async () => {
+    const { generateMap, stronglyConnected } = await import("../src/world/mapgen");
+    for (const seed of [11, 22]) {
+      for (let m = 1; m <= 6; m++) {
+        const w = generateMap(m, seed);
+        expect(w.theme).toBeDefined();
+        const pts = w.graph.points;
+        const index = (p: { x: number; y: number }) => pts.findIndex((q) => q.x === p.x && q.y === p.y);
+        const edges = w.graph.segments.map((s) => [index(s.p1), index(s.p2)] as [number, number]);
+        expect(stronglyConnected(pts.length, edges, w.graph.segments.map((s) => s.oneWay))).toBe(true);
+        expect(w.markings.filter((k) => k.type === "start")).toHaveLength(1);
+      }
+    }
+  });
+
+  it("GPS never routes the wrong way down a one-way street", async () => {
+    const { Navigator } = await import("../src/world/nav");
+    // A one-way street from a to b; the destination is near a, so the car at b must go around.
+    const a = { x: 0, y: 0 }, b = { x: 400, y: 0 }, c = { x: 400, y: 400 }, d = { x: 0, y: 400 };
+    const g = new Graph([a, b, c, d], [new Segment(a, b, true), new Segment(b, c), new Segment(c, d), new Segment(d, a)]);
+    const nav = new Navigator(g, { x: 0, y: 200 }); // on the d-a street
+    const path = nav.path({ x: 390, y: 0 });
+    expect(path.map((p) => `${p.x},${p.y}`)).toContain("400,400"); // around via c, not back along a-b
   });
 });

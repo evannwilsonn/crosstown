@@ -3,8 +3,8 @@ import type { Graph } from "./graph";
 
 /**
  * Navigation for the world's levels: like a phone's GPS, it knows how far a car is from its
- * destination by road and which way the next turn is. It never steers; the brain gets the
- * direction as one input and has to learn to follow it.
+ * destination by road and which way the next turn is, routing only the legal way down one-way
+ * streets. It never steers; the brain gets the direction as one input and has to learn to follow it.
  */
 export class Navigator {
   /** Road distance from each graph point to the destination. */
@@ -26,14 +26,17 @@ export class Navigator {
       const b = this.index.get(`${s.p2.x},${s.p2.y}`);
       if (a === undefined || b === undefined) continue;
       const len = distance(s.p1, s.p2);
-      adj[a].push({ to: b, len });
+      // Searching backward from the destination: an entry v -> u means a car may drive u -> v.
+      // One-way streets only run from p1 to p2.
       adj[b].push({ to: a, len });
+      if (!s.oneWay) adj[a].push({ to: b, len });
     }
     // Dijkstra outward from the destination's road.
     const seg = graph.segments[this.destSegment];
     const done = new Array(n).fill(false);
     if (seg) {
-      for (const p of [seg.p1, seg.p2]) {
+      // On a one-way destination street, only its start leads to the destination.
+      for (const p of seg.oneWay ? [seg.p1] : [seg.p1, seg.p2]) {
         const i = this.index.get(`${p.x},${p.y}`);
         if (i !== undefined) {
           this.dist[i] = distance(p, destination);
@@ -77,7 +80,7 @@ export class Navigator {
     if (!s) return { remaining: Infinity, waypoint: this.destination };
     if (segment === this.destSegment) return { remaining: distance(p, this.destination), waypoint: this.destination };
     let best = { remaining: Infinity, waypoint: this.destination };
-    for (const end of [s.p1, s.p2]) {
+    for (const end of s.oneWay ? [s.p2] : [s.p1, s.p2]) {
       const i = this.index.get(`${end.x},${end.y}`);
       if (i === undefined || this.dist[i] === Infinity) continue;
       const remaining = distance(p, end) + this.dist[i];
@@ -98,7 +101,7 @@ export class Navigator {
     if (seg === this.destSegment) return [p, this.destination];
     let first = -1;
     let best = Infinity;
-    for (const end of [s.p1, s.p2]) {
+    for (const end of s.oneWay ? [s.p2] : [s.p1, s.p2]) {
       const i = this.index.get(`${end.x},${end.y}`);
       if (i === undefined || this.dist[i] === Infinity) continue;
       const d = distance(p, end) + this.dist[i];

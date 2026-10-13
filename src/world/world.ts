@@ -67,6 +67,8 @@ export class World {
   buildings: Building[] = [];
   trees: Tree[] = [];
   markings: Marking[] = [];
+  /** Look of a generated level map; undefined keeps the page's own colors. */
+  theme?: import("./worldThemes").WorldThemeName;
   roadsVersion = -1;
   itemsVersion = -1;
 
@@ -258,7 +260,10 @@ export class World {
   obstacles(): Point[][] {
     const out: Point[][] = this.roadBorders.map((s) => [s.p1, s.p2]);
     for (const m of this.markings) {
-      if (m instanceof Light && (m.state === "red" || m.state === "yellow")) {
+      // The course also walls off yellow, which crushes a car already over the line when the light
+      // changes, however well it drove. Here yellow means what it does on a real road: stop if
+      // you can, clear the junction if you can't. Red is a wall.
+      if (m instanceof Light && m.state === "red") {
         const line = m.frontLine();
         out.push([line.p1, line.p2]);
       }

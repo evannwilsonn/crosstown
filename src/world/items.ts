@@ -9,6 +9,12 @@ export interface ItemPaint {
   shadow: string;
   leafLow: [number, number, number];
   leafHigh: [number, number, number];
+  /** Flat roofs (downtown, desert) instead of the course's pitched ones. */
+  roofStyle?: "pitched" | "flat";
+  /** Taller or shorter buildings than the course's. */
+  heightScale?: number;
+  /** Smaller or larger trees (desert shrubs are small). */
+  treeScale?: number;
 }
 
 /** A footprint extruded toward the viewer, with a pitched roof along its long axis (course: Pseudo 3D). */
@@ -21,7 +27,9 @@ export class Building {
 
   draw(ctx: CanvasRenderingContext2D, viewPoint: Point, paint: ItemPaint): void {
     const pts = this.base.points;
-    const top = pts.map((p) => fake3d(p, viewPoint, this.height * 0.6));
+    const flat = paint.roofStyle === "flat";
+    const height = this.height * (paint.heightScale ?? 1);
+    const top = pts.map((p) => fake3d(p, viewPoint, height * (flat ? 1 : 0.6)));
     const ceiling = new Polygon(top);
 
     const sides = pts.map((p, i) => {
@@ -31,7 +39,7 @@ export class Building {
     sides.sort((a, b) => b.distanceToPoint(viewPoint) - a.distanceToPoint(viewPoint));
 
     // Ridge runs between the midpoints of the two short ends.
-    const ridge = [average(pts[0], pts[1]), average(pts[2], pts[3])].map((p) => fake3d(p, viewPoint, this.height));
+    const ridge = [average(pts[0], pts[1]), average(pts[2], pts[3])].map((p) => fake3d(p, viewPoint, height));
     const roofs = [
       new Polygon([ceiling.points[0], ceiling.points[3], ridge[1], ridge[0]]),
       new Polygon([ceiling.points[2], ceiling.points[1], ridge[0], ridge[1]]),
@@ -55,11 +63,12 @@ export class Building {
     }
 
     ceiling.path(ctx);
-    ctx.fillStyle = paint.wall;
+    ctx.fillStyle = flat ? paint.roof : paint.wall;
     ctx.fill();
-    ctx.strokeStyle = paint.wall;
+    ctx.strokeStyle = flat ? paint.roofEdge : paint.wall;
     ctx.lineWidth = 6;
     ctx.stroke();
+    if (flat) return;
 
     ctx.lineJoin = "round";
     for (const roof of roofs) {
@@ -100,11 +109,12 @@ export class Tree {
   }
 
   draw(ctx: CanvasRenderingContext2D, viewPoint: Point, paint: ItemPaint): void {
-    const top = fake3d(this.center, viewPoint, this.height);
+    const k = paint.treeScale ?? 1;
+    const top = fake3d(this.center, viewPoint, this.height * k);
     for (let l = 0; l < LEVELS; l++) {
       const t = l / (LEVELS - 1);
       const c = paint.leafLow.map((v, i) => Math.round(lerp(v, paint.leafHigh[i], t)));
-      const poly = this.level(lerp2D(this.center, top, t), lerp(this.size, 40, t));
+      const poly = this.level(lerp2D(this.center, top, t), lerp(this.size * k, 40 * k, t));
       poly.path(ctx);
       ctx.fillStyle = `rgb(${c[0]},${c[1]},${c[2]})`;
       ctx.fill();
