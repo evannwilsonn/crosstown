@@ -144,22 +144,3 @@ describe("traffic layouts", () => {
     }
   });
 });
-
-describe("trained brain", () => {
-  it("the shipped highway brain passes the course alone without crashing", async () => {
-    const brain = (await import("../src/pretrained/highway.json")).default;
-    const sim = new Simulation(0, 210, { population: 1, mutation: 0, seed: 2026, layout: "course" }, brain as never);
-    let crashed = false;
-    let cleared = false;
-    for (let f = 0; f < 3000 && sim.generation === 1; f++) {
-      crashed ||= sim.cars[0].damaged;
-      cleared ||= sim.clearedCourse();
-      const before = sim.generation;
-      sim.step();
-      // The clearing frame ends the generation inside step(), so a quick end without a crash means it cleared.
-      if (sim.generation !== before && !crashed && f < 2000) cleared = true;
-    }
-    expect(crashed).toBe(false);
-    expect(cleared).toBe(true);
-  });
-});

@@ -54,9 +54,7 @@ Both ports were checked against the course videos' full transcripts as well as t
 
 Endless traffic is generated so it is always passable: a two-lane block is never followed directly by another, and the open lane moves at most one lane between blocks. Without that rule, random rows can zig-zag the only gap across the road every 210 px, a weave no car can make. On Endless, the course's small 5-6-4 network typically plateaus after passing around eight cars.
 
-`npx tsx scripts/train.ts <generations> <cars> <mutation> <frames> <course|endless> [out.json]` trains headless, prints progress per generation, and saves the brain once a generation clears the course. `npx tsx scripts/train-world.ts [generations] [cars] [mutation] [out.json]` does the same for the world's sample town.
-
-Both pages start from random brains, because watching an untrained network teach itself is the point. **Load trained brain** swaps in one trained offline with those scripts (`src/pretrained/`): the highway brain passes all seven course cars without a crash, and the world brain drives the sample town for the full 45 s generation without one. New generations then breed from it.
+`npx tsx scripts/train.ts <generations> <cars> <mutation> <frames> <course|endless>` trains headless and prints progress per generation.
 
 Deliberate differences from the course: lane guides are computed per road with an explicit direction (right-hand traffic), so markings always face the way cars drive; generations advance automatically with a 45 s cap, because distance-driven fitness never stalls for a car driving in circles; maps over 300 roads are view-and-drive only, since regenerating roads is quadratic.
 

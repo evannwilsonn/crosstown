@@ -2,10 +2,6 @@ import "./style.css";
 import { NeuralNetwork, type NetworkJSON } from "./network";
 import { Simulation, type Parent } from "./simulation";
 import { drawNetwork } from "./visualizer";
-import pretrained from "./pretrained/highway.json";
-
-/** Trained offline with scripts/train.ts on the Course layout; passes all seven cars without a crash. */
-const PRETRAINED = pretrained as Parent;
 
 // v2: fitness changed from raw distance to distance gained on traffic.
 const STORAGE_KEY = "sdc.parent.v2";
@@ -34,7 +30,6 @@ const ui = {
   next: $<HTMLButtonElement>("#next"),
   forget: $<HTMLButtonElement>("#forget"),
   download: $<HTMLButtonElement>("#download"),
-  pretrained: $<HTMLButtonElement>("#pretrained"),
   status: $("#status"),
   brainNote: $("#brain-note"),
 };
@@ -222,16 +217,6 @@ ui.next.addEventListener("click", () => {
   sim.nextGeneration();
   saveParent(sim.parent);
   announce(`Skipped to generation ${sim.generation}.`);
-});
-
-ui.pretrained.addEventListener("click", () => {
-  if (sim.settings.layout !== "course") {
-    (ui.layout.querySelector('input[value="course"]') as HTMLInputElement).checked = true;
-    sim.settings.layout = "course";
-  }
-  sim.adopt({ ...PRETRAINED });
-  saveParent(sim.parent);
-  announce("Loaded a brain trained offline. Car 0 drives it unchanged and passes all seven cars; the rest are mutations of it.");
 });
 
 ui.forget.addEventListener("click", () => {

@@ -164,22 +164,3 @@ describe("driving in the world", () => {
     expect(sim.begin("AI")).toBe(false);
   });
 });
-
-describe("trained world brain", () => {
-  it("drives the sample town for the whole generation without crashing", async () => {
-    const brain = (await import("../src/pretrained/world.json")).default;
-    const w = sampleWorld();
-    const sim = new WorldSim(() => w, brain as never);
-    sim.population = 1;
-    sim.begin("AI");
-    const car = sim.cars[0];
-    let frames = 0;
-    while (sim.generation === 1) {
-      w.updateLights(frames / 60);
-      expect(car.damaged).toBe(false);
-      sim.step();
-      frames++;
-    }
-    expect(frames).toBeGreaterThan(2600);
-  });
-});
