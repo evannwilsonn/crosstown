@@ -46,7 +46,11 @@ export class Car {
     this.polygon = this.createPolygon();
   }
 
-  update(borders: Point[][], traffic: Car[]): void {
+  /** Frames an AI car may go without progress before it is retired. The world raises it so cars can wait at lights. */
+  stallFrames = STALL_FRAMES;
+
+  /** `extra` feeds the brain inputs beyond the rays (the world's GPS direction). */
+  update(borders: Point[][], traffic: Car[], extra: number[] = []): void {
     if (!this.damaged) {
       this.move();
       this.polygon = this.createPolygon();
@@ -57,7 +61,7 @@ export class Car {
       this.sensor.update(borders, traffic);
       // The course keeps thinking after a crash, so the network view stays live.
       if (this.brain) {
-        const inputs = this.sensor.inputs();
+        const inputs = extra.length ? this.sensor.inputs().concat(extra) : this.sensor.inputs();
         const [forward, left, right, reverse] =
           this.brain instanceof Genome ? this.brain.activate(inputs) : NeuralNetwork.feedForward(inputs, this.brain);
         this.controls.forward = forward === 1;
@@ -75,7 +79,7 @@ export class Car {
     if (distance > this.progress + 1) {
       this.progress = distance;
       this.framesSinceProgress = 0;
-    } else if (this.type === "AI" && ++this.framesSinceProgress > STALL_FRAMES) {
+    } else if (this.type === "AI" && ++this.framesSinceProgress > this.stallFrames) {
       this.damaged = true;
     }
   }

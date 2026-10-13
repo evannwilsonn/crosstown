@@ -1,19 +1,22 @@
 import "../style.css";
-import type { Parent } from "../simulation";
 import { GraphEditor, MarkingEditor, type Editor } from "./editors";
 import { Graph } from "./graph";
 import type { MarkingType } from "./markings";
 import { drawMinimap } from "./minimap";
 import { isOsmData, OVERPASS_QUERY, parseOsm } from "./osm";
 import { sampleWorld } from "./sample";
-import { WorldSim } from "./sim";
+import { WORLD_INPUTS, WorldSim, type WorldSaved } from "./sim";
+import { drawLearningCurve } from "../chart";
+import { Genome } from "../neat";
 import { Viewport } from "./viewport";
-import { drawNetwork } from "../visualizer";
-import { NeuralNetwork } from "../network";
+import { drawGenome } from "../visualizer";
 import { World, type CourseSave, type WorldJSON, type WorldPaint } from "./world";
 
 const WORLD_KEY = "sdc.world.v1";
-const PARENT_KEY = "sdc.world.parent.v1";
+// NEAT replaced the fixed network; the whole population and level are saved.
+const STATE_KEY = "sdc.world.neat.v1";
+/** Max speed runs as many steps as fit in this much of each frame. */
+const MAX_BUDGET_MS = 14;
 const PX_PER_METER = 10;
 const ITEM_DELAY_MS = 300;
 /** Regenerating roads is quadratic in road count; above this, maps are view-and-drive only. */
@@ -27,6 +30,8 @@ const ctx = canvas.getContext("2d")!;
 const mini = $<HTMLCanvasElement>("#minimap");
 const brainCanvas = $<HTMLCanvasElement>("#brain");
 const brainCtx = brainCanvas.getContext("2d")!;
+const chartCanvas = $<HTMLCanvasElement>("#chart");
+const chartCtx = chartCanvas.getContext("2d")!;
 const miniCtx = mini.getContext("2d")!;
 
 const ui = {
@@ -35,7 +40,9 @@ const ui = {
   generation: $("#stat-generation"),
   alive: $("#stat-alive"),
   run: $("#stat-run"),
-  best: $("#stat-best"),
+  level: $("#stat-level"),
+  speed: $<HTMLFieldSetElement>("#speed"),
+  brainNote: $("#brain-note"),
   population: $<HTMLInputElement>("#population"),
   populationOut: $<HTMLOutputElement>("#population-out"),
   mutation: $<HTMLInputElement>("#mutation"),
@@ -115,7 +122,20 @@ function initialWorld(): World {
 
 let world = initialWorld();
 const viewport = new Viewport(canvas);
-const sim = new WorldSim(() => world, load<Parent>(PARENT_KEY));
+function loadState(): WorldSaved | null {
+  const s = load<WorldSaved>(STATE_KEY);
+  return s?.neat?.inputs === WORLD_INPUTS && Array.isArray(s.neat.genomes) && s.neat.genomes.length ? s : null;
+}
+let sim: WorldSim;
+try {
+  sim = new WorldSim(() => world, loadState());
+} catch {
+  sim = new WorldSim(() => world);
+}
+function saveState(): void {
+  save(STATE_KEY, sim.generation > 1 ? sim.toJSON() : null);
+}
+let stepsPerFrame = 1;
 
 const graphEditor = new GraphEditor(viewport, () => world.graph);
 const markingEditors = new Map<MarkingType, MarkingEditor>();
@@ -129,7 +149,7 @@ const HELP: Record<string, string> = {
   crossing: "Hover a road and click to paint a crosswalk across both lanes.",
   parking: "Hover a lane and click to paint a parking bay.",
   start: "Click a lane to set where cars spawn and which way they face. The first start marking is used.",
-  target: "Click a lane to mark a destination.",
+  target: "Click a lane to mark the destination for levels 1 and 2. Without one, cars head for the farthest road.",
 };
 
 function setTool(tool: string): void {
@@ -185,6 +205,9 @@ function saveWorld(): void {
 function replaceWorld(next: World, msg: string, view?: { zoom: number; center: { x: number; y: number } }): void {
   stopDriving();
   world = next;
+  // A new map starts the levels over; the brains keep what they've learned.
+  sim.restartLevels();
+  saveState();
   markingCount = -1;
   // Course saves arrive with roads and scenery already built.
   if (world.roadsVersion !== world.graph.version) world.generateRoads();
@@ -217,11 +240,14 @@ let lastStats = 0;
 function frame(nowMs: number): void {
   const time = nowMs / 1000;
   regenerate(nowMs);
-  world.updateLights(time);
+  // While cars drive, the sim runs the lights on its own clock so they keep pace at any speed.
+  if (sim.mode === "off") world.updateLights(time);
 
-  if (sim.step()) {
-    save(PARENT_KEY, sim.parent);
-    announce(`Generation ${sim.generation} started from a ${sim.parent ? meters(sim.parent.progress) : "random"} brain.`);
+  const t0 = performance.now();
+  for (let i = 0; i < stepsPerFrame && performance.now() - t0 < MAX_BUDGET_MS; i++) {
+    if (!sim.step()) continue;
+    saveState();
+    announce(describeGeneration());
   }
   if (sim.leader && !viewport.isPanning) {
     viewport.center = {
@@ -239,6 +265,7 @@ function frame(nowMs: number): void {
   const viewPoint = viewport.center;
   const radius = viewport.viewRadius;
   world.draw(ctx, viewPoint, radius, paint, sim.mode === "off");
+  if (sim.mode === "AI" && sim.level > 1) drawTrip();
 
   ctx.globalAlpha = 0.2;
   for (const car of sim.cars) if (car !== sim.leader) car.draw(ctx, car.damaged ? paint.items.wallEdge : paint.white);
@@ -262,14 +289,21 @@ function frame(nowMs: number): void {
   );
 
   drawBrain(nowMs);
+  drawChart();
 
   if (nowMs - lastStats > 150) {
     lastStats = nowMs;
     const driving = sim.mode !== "off";
     ui.generation.textContent = !driving ? "Parked" : sim.mode === "KEYS" ? "Manual" : String(sim.generation);
     ui.alive.textContent = !driving ? "0" : `${sim.alive} of ${sim.cars.length}`;
-    ui.run.textContent = meters(sim.leader?.progress ?? 0);
-    ui.best.textContent = sim.parent ? meters(sim.parent.progress) : "None yet";
+    ui.run.textContent = !driving || !sim.leader
+      ? "0 m"
+      : sim.level === 1
+        ? meters(sim.leader.progress)
+        : `${meters(sim.remaining(sim.leader))} to go${sim.tripsPerGeneration > 1 ? `, trip ${sim.trip + 1} of ${sim.tripsPerGeneration}` : ""}`;
+    ui.level.textContent = `${sim.level}: ${sim.levelSpec.name}`;
+    const g = sim.leader?.brain instanceof Genome ? sim.leader.brain : null;
+    ui.brainNote.textContent = g ? `${g.hiddenCount} hidden ${g.hiddenCount === 1 ? "neuron" : "neurons"}, ${g.enabledCount} links, ${sim.neat.species.length || 1} species` : "";
   }
   requestAnimationFrame(frame);
 }
@@ -277,7 +311,7 @@ function frame(nowMs: number): void {
 function drawBrain(now: number): void {
   const { width, height } = brainCanvas.getBoundingClientRect();
   const brain = sim.leader?.brain;
-  if (!(brain instanceof NeuralNetwork)) {
+  if (!(brain instanceof Genome)) {
     brainCtx.clearRect(0, 0, width, height);
     brainCtx.fillStyle = color("--ink-muted");
     brainCtx.font = "600 14px Overpass, system-ui, sans-serif";
@@ -286,7 +320,7 @@ function drawBrain(now: number): void {
     brainCtx.fillText("The network appears once the cars are driving.", width / 2, height / 2);
     return;
   }
-  drawNetwork(brainCtx, brain, width, height, {
+  drawGenome(brainCtx, brain, width, height, {
     positive: paint.yellow,
     negative: color("--sign-blue"),
     node: paint.asphalt,
@@ -295,6 +329,76 @@ function drawBrain(now: number): void {
   }, -now / 50);
 }
 new ResizeObserver(() => fit(brainCanvas, brainCtx)).observe(brainCanvas);
+
+/* Levels, the trip and the learning curve */
+function describeLevel(): string {
+  const spec = sim.levelSpec;
+  const what = {
+    1: "drive as long as they can without crashing.",
+    2: "reach the destination. A GPS input tells each brain which way it is; the brain still does all the steering.",
+    3: `reach a new random destination each trip, ${sim.tripsPerGeneration} trips a generation. Clear it by arriving on every trip.`,
+    4: "random start, random destination, every trip. No final goal: the brains just keep getting better at it.",
+  }[spec.number];
+  return `Level ${spec.number}, ${spec.name}: ${what}`;
+}
+
+function describeGeneration(): string {
+  const s = sim.last;
+  if (!s) return describeLevel();
+  if (s.levelUp) return `Generation ${s.generation} cleared level ${s.level}. ${describeLevel()}`;
+  const arrived = s.level === 1 ? "" : s.trips > 1 ? ` Its best car arrived on ${s.arrivedTrips} of ${s.trips} trips.` : s.arrivedIn !== null ? ` Its best car arrived in ${s.arrivedIn.toFixed(1)} s.` : "";
+  if (s.grew) return `Generation ${s.generation}'s best brain grew a neuron: ${s.neurons} hidden now.${arrived}`;
+  return `Generation ${s.generation}: ${s.species} species competing.${arrived}`;
+}
+
+/** The destination and the leader's GPS arrow, drawn on the map. */
+function drawTrip(): void {
+  const d = sim.destination;
+  if (d) {
+    [
+      [paint.red, 16],
+      [paint.white, 11],
+      [paint.red, 6],
+    ].forEach(([c, r]) => {
+      ctx.beginPath();
+      ctx.arc(d.x, d.y, r as number, 0, Math.PI * 2);
+      ctx.fillStyle = c as string;
+      ctx.fill();
+    });
+  }
+  const leader = sim.leader;
+  const wp = leader ? sim.waypoint(leader) : null;
+  if (leader && wp && !leader.damaged) {
+    ctx.save();
+    ctx.strokeStyle = paint.yellow;
+    ctx.globalAlpha = 0.7;
+    ctx.lineWidth = 3;
+    ctx.setLineDash([4, 8]);
+    ctx.beginPath();
+    ctx.moveTo(leader.x, leader.y);
+    ctx.lineTo(wp.x, wp.y);
+    ctx.stroke();
+    ctx.restore();
+  }
+}
+
+let chartKey = -1;
+function drawChart(): void {
+  if (chartKey === sim.history.length) return;
+  chartKey = sim.history.length;
+  const { width, height } = chartCanvas.getBoundingClientRect();
+  drawLearningCurve(chartCtx, sim.history, width, height, {
+    odd: paint.yellow,
+    even: color("--sign-green"),
+    axis: color("--shoulder"),
+    label: paint.white,
+    muted: color("--ink-muted"),
+  });
+}
+new ResizeObserver(() => {
+  fit(chartCanvas, chartCtx);
+  chartKey = -1;
+}).observe(chartCanvas);
 
 /* Driving */
 function setDriving(on: boolean): void {
@@ -318,7 +422,7 @@ function startDriving(mode: "AI" | "KEYS"): void {
     return;
   }
   setDriving(true);
-  announce(mode === "KEYS" ? "You're driving. Use the arrow keys or W, A, S, D." : `Generation ${sim.generation} is on the road.`);
+  announce(mode === "KEYS" ? "You're driving. Use the arrow keys or W, A, S, D." : sim.last ? describeGeneration() : describeLevel());
   canvas.focus();
 }
 
@@ -337,14 +441,20 @@ ui.stop.addEventListener("click", () => {
 });
 ui.forget.addEventListener("click", () => {
   sim.forget();
-  save(PARENT_KEY, null);
-  announce("Learning reset. The next generation starts from random brains.");
+  saveState();
+  announce("Learning reset: level 1, random brains with no hidden neurons.");
 });
 
 ui.population.addEventListener("input", () => (ui.populationOut.value = ui.population.value));
 ui.mutation.addEventListener("input", () => {
   ui.mutationOut.value = `${Math.round(Number(ui.mutation.value) * 100)}%`;
   sim.mutation = Number(ui.mutation.value);
+  sim.neat.rates.power = sim.mutation * 5;
+});
+
+ui.speed.addEventListener("change", (e) => {
+  const v = (e.target as HTMLInputElement).value;
+  stepsPerFrame = v === "max" ? Infinity : Number(v);
 });
 
 ui.tools.addEventListener("change", (e) => setTool((e.target as HTMLInputElement).value));

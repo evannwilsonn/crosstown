@@ -26,7 +26,7 @@
       <aside class="rail">
         <header class="sign sign--title">
           <h1>Virtual world</h1>
-          <p>Draw roads, place markings, and the town builds itself around them. Then send the cars out to learn the streets.</p>
+          <p>Draw roads, place markings, and the town builds itself around them. Then send out cars with the smallest possible brains: they grow neurons as they learn to stay on the road, find a destination, and then find any destination.</p>
         </header>
 
         <section class="panel" aria-labelledby="tools-title">
@@ -53,8 +53,16 @@
             <div><dt>Generation</dt><dd id="stat-generation">Parked</dd></div>
             <div><dt>Still driving</dt><dd id="stat-alive">0</dd></div>
             <div><dt>This run</dt><dd id="stat-run">0 m</dd></div>
-            <div><dt>Best so far</dt><dd id="stat-best">None yet</dd></div>
+            <div><dt>Level</dt><dd id="stat-level">1</dd></div>
           </dl>
+        </section>
+
+        <section class="panel" aria-labelledby="chart-title">
+          <div class="panel-head">
+            <h2 id="chart-title">Learning curve</h2>
+            <p class="legend">Best score per generation</p>
+          </div>
+          <canvas id="chart" aria-label="Chart: each generation's best score, by level. Dots mark generations where the best brain grew."></canvas>
         </section>
 
         <section class="panel brain" aria-labelledby="brain-title">
@@ -65,7 +73,8 @@
               <span class="swatch swatch--neg"></span>Inhibits
             </p>
           </div>
-          <canvas id="brain" aria-label="Neural network of the leading car: five sensor inputs, six hidden neurons, four outputs for forward, left, right and reverse."></canvas>
+          <canvas id="brain" aria-label="The leading car's brain as it has grown: five sensors and a GPS direction at the bottom, four controls at the top (forward, left, right, reverse), and any hidden neurons evolution has added between them."></canvas>
+          <p id="brain-note" class="help help--quiet"></p>
         </section>
 
         <section class="panel controls" aria-labelledby="drive-title">
@@ -78,6 +87,12 @@
             <span class="field-label">Mutation <output id="mutation-out" for="mutation">10%</output></span>
             <input id="mutation" type="range" min="0" max="0.5" step="0.01" value="0.1" />
           </label>
+          <fieldset id="speed" class="segmented">
+            <legend>Sim speed</legend>
+            <label><input type="radio" name="speed" value="1" checked /><span>1×</span></label>
+            <label><input type="radio" name="speed" value="3" /><span>3×</span></label>
+            <label><input type="radio" name="speed" value="max" /><span>Max</span></label>
+          </fieldset>
           <label class="toggle">
             <input id="sensors" type="checkbox" checked />
             <span>Show the leader's sensors</span>

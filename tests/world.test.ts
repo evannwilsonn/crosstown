@@ -164,3 +164,54 @@ describe("driving in the world", () => {
     expect(sim.begin("AI")).toBe(false);
   });
 });
+
+describe("world levels and navigation", () => {
+  it("measures road distance to the destination and points the GPS along the road", async () => {
+    const { Navigator } = await import("../src/world/nav");
+    // An L-shaped road: (0,0) to (400,0) to (400,400).
+    const a = { x: 0, y: 0 };
+    const b = { x: 400, y: 0 };
+    const c = { x: 400, y: 400 };
+    const nav = new Navigator(new Graph([a, b, c], [new Segment(a, b), new Segment(b, c)]), { x: 400, y: 300 });
+    const from = { x: 100, y: 0 };
+    expect(nav.remaining(from)).toBeCloseTo(300 + 300, 0); // along the road, not the 361 px straight line
+    expect(nav.guide(from, nav.nearestSegment(from)).waypoint).toEqual(b); // head for the corner first
+  });
+
+  it("starts at level 1 with minimal brains and moves up when a car survives the time limit", async () => {
+    const { WORLD_INPUTS } = await import("../src/world/sim");
+    const w = sampleWorld();
+    const sim = new WorldSim(() => w);
+    sim.population = 1;
+    sim.begin("AI");
+    expect(sim.level).toBe(1);
+    expect(sim.neat.genomes[0].inputIds).toHaveLength(WORLD_INPUTS);
+    const car = sim.cars[0];
+    car.brain = undefined; // a parked car never crashes, but stalls: drive it gently in place
+    let frames = 0;
+    while (sim.generation === 1 && frames < 4000) {
+      car.speed = 0.5;
+      car.angle += 0.02; // small circles in the start lane
+      sim.step();
+      frames++;
+    }
+    expect(sim.generation).toBe(2);
+  });
+
+  it("random-trip levels score every brain on several trips before breeding", async () => {
+    const { TRIPS_PER_GENERATION } = await import("../src/world/sim");
+    const w = sampleWorld();
+    const sim = new WorldSim(() => w);
+    sim.population = 5;
+    sim.level = 3;
+    sim.begin("AI");
+    expect(sim.tripsPerGeneration).toBe(TRIPS_PER_GENERATION);
+    const destinations = new Set<string>();
+    while (sim.generation === 1) {
+      if (sim.destination) destinations.add(`${Math.round(sim.destination.x)},${Math.round(sim.destination.y)}`);
+      sim.step();
+    }
+    expect(destinations.size).toBe(TRIPS_PER_GENERATION);
+    expect(sim.last!.trips).toBe(TRIPS_PER_GENERATION);
+  });
+});

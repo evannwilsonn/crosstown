@@ -2,6 +2,7 @@ import "./style.css";
 import { Genome } from "./neat";
 import { LEVELS, Simulation, type SavedState } from "./simulation";
 import { drawGenome } from "./visualizer";
+import { drawLearningCurve } from "./chart";
 
 // NEAT replaced the fixed network; the whole population and level are saved, not one brain.
 const STORAGE_KEY = "sdc.neat.v1";
@@ -152,59 +153,18 @@ function drawBrain(now: number): void {
   }, -now / 50);
 }
 
-/**
- * Learning curve: one bar per generation, the best car's lead on traffic. Bars alternate color
- * by level, each level is labeled where it starts, and a dot marks generations whose best brain grew.
- */
 let chartDrawn = -1;
 function drawChart(): void {
-  const rows = sim.history.slice(-90);
-  const key = sim.history.length * 1000 + rows.length;
-  if (chartDrawn === key) return;
-  chartDrawn = key;
-  const ctx = chartCtx;
+  if (chartDrawn === sim.history.length) return;
+  chartDrawn = sim.history.length;
   const { width, height } = chartCanvas.getBoundingClientRect();
-  ctx.clearRect(0, 0, width, height);
-  const pad = { l: 2, r: 2, t: 16, b: 16 };
-  const w = width - pad.l - pad.r;
-  const h = height - pad.t - pad.b;
-  ctx.font = "600 10px Overpass, system-ui, sans-serif";
-  ctx.strokeStyle = palette.shoulder;
-  ctx.beginPath();
-  ctx.moveTo(pad.l, pad.t + h + 0.5);
-  ctx.lineTo(pad.l + w, pad.t + h + 0.5);
-  ctx.stroke();
-  ctx.fillStyle = palette.concrete;
-  ctx.textBaseline = "alphabetic";
-  if (!rows.length) {
-    ctx.fillText("Each finished generation adds a bar here.", pad.l, pad.t + h / 2);
-    return;
-  }
-  const topValue = Math.max(100, ...rows.map((r) => r.best));
-  const slot = w / Math.max(rows.length, 30);
-  let lastLabel = -Infinity;
-  rows.forEach((r, i) => {
-    const x = pad.l + i * slot;
-    const bh = (Math.max(0, r.best) / topValue) * h;
-    ctx.fillStyle = r.level % 2 ? palette.yellow : palette.green;
-    ctx.fillRect(x + 1, pad.t + h - bh, Math.max(1, slot - 2), bh);
-    if (r.grew) {
-      ctx.fillStyle = palette.white;
-      ctx.beginPath();
-      ctx.arc(x + slot / 2, pad.t + h - bh - 4, 2, 0, Math.PI * 2);
-      ctx.fill();
-    }
-    // Label where each level starts; quick level-ups share one label so they don't overlap.
-    if ((i === 0 || rows[i - 1].level !== r.level) && x - lastLabel > 22) {
-      ctx.fillStyle = palette.white;
-      ctx.fillText(`L${r.level}`, x + 1, pad.t - 4);
-      lastLabel = x;
-    }
+  drawLearningCurve(chartCtx, sim.history, width, height, {
+    odd: palette.yellow,
+    even: palette.green,
+    axis: palette.shoulder,
+    label: palette.white,
+    muted: palette.concrete,
   });
-  ctx.fillStyle = palette.concrete;
-  ctx.fillText(`gen ${rows[0].generation}`, pad.l, height - 3);
-  const last = `gen ${rows[rows.length - 1].generation}`;
-  ctx.fillText(last, pad.l + w - ctx.measureText(last).width, height - 3);
 }
 
 function brainSummary(): string {

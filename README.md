@@ -2,9 +2,9 @@
 
 A population of cars learns to drive through traffic with no training data and no libraries. Every car senses the road with five rays and starts with the smallest possible brain, sensors wired straight to its controls. The highway evolves those brains with NEAT, so the network itself grows new neurons and connections as the traffic gets harder, level after level.
 
-Phase 2 (`world.html`) builds a virtual town around a road network you draw: road borders, buildings and trees in pseudo 3D, road markings with working traffic lights, OpenStreetMap import and a minimap. The same cars then learn to drive its streets.
+Phase 2 (`world.html`) builds a virtual town around a road network you draw: road borders, buildings and trees in pseudo 3D, road markings with working traffic lights, OpenStreetMap import and a minimap. Cars with the same growing NEAT brains then learn its streets, level by level: stay on the road, reach a destination, reach any destination.
 
-Written in TypeScript with the Canvas API. A port of Radu Mariescu-Istodor's two freeCodeCamp courses ([Self-driving car](https://github.com/gniziemazity/Self-driving-car), [Virtual world](https://github.com/gniziemazity/virtual-world), both MIT), rebuilt with typed modules, tests, automatic generations and a redesigned interface. The highway goes beyond the course: NEAT instead of a fixed network, and levels that keep getting harder.
+Written in TypeScript with the Canvas API. A port of Radu Mariescu-Istodor's two freeCodeCamp courses ([Self-driving car](https://github.com/gniziemazity/Self-driving-car), [Virtual world](https://github.com/gniziemazity/virtual-world), both MIT), rebuilt with typed modules, tests, automatic generations and a redesigned interface. Both pages go beyond the course: NEAT instead of a fixed network, and levels that keep getting harder.
 
 ## Run it
 
@@ -43,7 +43,7 @@ Arrow keys or W A S D drive the car in "Drive it yourself" mode.
 | Pseudo 3D | `world/items.ts`: walls and pitched roofs lifted away from the camera, seven-level trees |
 | Road markings | `world/markings.ts`: stop, yield, crossing, parking, light, start, target |
 | Saving the world | Autosaves in the browser, copy or import map JSON, and opens the course's own `.world` saves |
-| Integration | `world/sim.ts`: cars spawn at the start marking and evolve; fitness is distance driven, as in the course |
+| Integration | `world/sim.ts`: cars spawn at the start marking and evolve with NEAT through four levels (below) |
 | OpenStreetMap | `world/osm.ts`: paste the query into overpass-turbo.eu, export raw JSON, import it |
 | Minimap | `world/minimap.ts` |
 
@@ -57,7 +57,18 @@ Endless traffic is generated so it is always passable: a two-lane block is never
 
 `npx tsx scripts/train.ts [generations] [cars] [mutation] [frame cap]` runs NEAT headless and prints each generation's level, cars passed and brain size.
 
-Deliberate differences from the course: lane guides are computed per road with an explicit direction (right-hand traffic), so markings always face the way cars drive; generations advance automatically with a 45 s cap, because distance-driven fitness never stalls for a car driving in circles; maps over 300 roads are view-and-drive only, since regenerating roads is quadratic.
+### Levels in the world
+
+The world's brains get the 5 rays plus one GPS input: the angle to the next turn on the shortest road route to the destination (`world/nav.ts`, Dijkstra over the road graph). Navigation never steers. The brain has to learn to follow the arrow and stay on the road at the same time.
+
+1. **Stay on the road.** Fitness is distance driven, as in the course. Cleared when a car is still driving at the 45 s limit.
+2. **Find the destination.** The Target marking, or, without one, the farthest road from the start. Fitness is how much closer by road the car got, plus a bonus for arriving that grows the sooner it arrives.
+3. **Any destination.** A new random destination every trip, three trips per generation, each scored as a share of its length. Cleared when one brain arrives on all three. One random trip per generation turned out to be luck: champions were picked on easy trips and the population got worse over time.
+4. **Anywhere to anywhere.** Random start and destination every trip, no final goal. In headless runs (`scripts/train-world.ts`), populations reached level 4 within about 40 generations; in two of three runs the best car's arrival rate on level 4 roughly doubled over the next 85 generations (20% to 39%, 21% to 42%), while the third held around 40%.
+
+Lights are driven by the simulation's own clock, so they keep pace at Max speed. Loading a new map starts the levels over but keeps the brains.
+
+Deliberate differences from the course: lane guides are computed per road with an explicit direction (right-hand traffic), so markings always face the way cars drive; generations advance automatically with a time limit, because distance-driven fitness never stalls for a car driving in circles; maps over 300 roads are view-and-drive only, since regenerating roads is quadratic.
 
 ## Code map
 
@@ -71,9 +82,10 @@ src/
   road.ts        road surface and US-style markings
   traffic.ts     lazily generated, seeded traffic rows (never blocks all lanes)
   simulation.ts  levels, generations, NEAT breeding, saving
+  chart.ts       learning curve shared by both pages
   visualizer.ts  draws the leader's network live
   main.ts        canvas, UI controls, storage
-  world/         phase 2: geometry, graph, world generation, markings, editors, viewport, OSM, minimap, sim
+  world/         phase 2: geometry, graph, world generation, markings, editors, viewport, OSM, minimap, navigation, sim
 tests/core.test.ts, tests/world.test.ts
 ```
 
@@ -83,5 +95,5 @@ The interface borrows from US highway signage: Overpass (an open-source revival 
 
 ## Next
 
-- Bring NEAT and levels to the virtual world: drive without crashing, then reach the target, then reach it faster.
+- Other cars in the world, so brains learn to share the road.
 - Replace the step activation with a smooth one and compare learning speed.
