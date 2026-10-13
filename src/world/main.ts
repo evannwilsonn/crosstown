@@ -482,7 +482,7 @@ function frame(nowMs: number): void {
     lastStats = nowMs;
     const driving = sim.mode !== "off";
     ui.generation.textContent = sim.mode === "KEYS" ? "Manual" : String(sim.generation);
-    ui.alive.textContent = !driving ? "Parked" : `${sim.alive}/${sim.cars.length}`;
+    ui.alive.textContent = !driving ? "Parked" : sim.mode === "KEYS" ? "You" : `${sim.moving}/${sim.cars.length}`;
     ui.run.textContent = !driving || !sim.followed
       ? "0 m"
       : sim.levelSpec.goal === "survive"

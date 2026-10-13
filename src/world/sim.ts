@@ -179,6 +179,13 @@ const rayAngles = Array.from({ length: WORLD_RAYS }, (_, i) => Math.PI / 2 - (i 
 const MIN_CLOSED_LENGTH = 240;
 /** A car that hasn't made progress for this long (1 s) isn't followed while others are moving. */
 const FOLLOW_IDLE_FRAMES = 60;
+/**
+ * When every car still on the road has been stopped this long (2.5 s), and none is waiting at a
+ * red light, the trip ends instead of waiting out each car's stall timer.
+ */
+const ALL_IDLE_FRAMES = 150;
+/** A red light this close ahead of a stopped car means it's waiting, not stuck. */
+const RED_WAIT_REACH = 90;
 
 function near(o: Point[], car: Car): boolean {
   const [a, b] = o;
@@ -296,6 +303,24 @@ export class WorldSim {
 
   get alive(): number {
     return this.cars.filter((c) => !c.damaged && this.trips.get(c)?.arrivedAt === undefined).length;
+  }
+
+  /** Cars still on the road that are actually moving, not stopped in place. */
+  get moving(): number {
+    return this.cars.filter((c) => !c.damaged && this.trips.get(c)?.arrivedAt === undefined && c.idleFrames < FOLLOW_IDLE_FRAMES).length;
+  }
+
+  /** True when a red light is just ahead of the car: it's waiting, so it isn't stuck. */
+  private atRed(car: Car, lights: Light[]): boolean {
+    const fx = -Math.sin(car.angle);
+    const fy = -Math.cos(car.angle);
+    return lights.some((l) => {
+      if (l.state !== "red") return false;
+      const dx = l.center.x - car.x;
+      const dy = l.center.y - car.y;
+      const ahead = dx * fx + dy * fy;
+      return ahead > -10 && ahead < RED_WAIT_REACH && Math.abs(dx * fy - dy * fx) < 40;
+    });
   }
 
   /** Returns false when the world has no start marking or no road to drive. */
@@ -684,7 +709,14 @@ export class WorldSim {
       this.framesSinceGain++;
     }
 
-    let end = this.alive === 0 || this.framesSinceGain > LEADER_PATIENCE;
+    // Every car left is parked and none is at a red light: nothing more will happen this trip.
+    const stuck = (() => {
+      const left = this.cars.filter((c) => !c.damaged && this.trips.get(c)?.arrivedAt === undefined);
+      if (!left.length || left.some((c) => c.idleFrames < ALL_IDLE_FRAMES)) return false;
+      const lights = world.markings.filter((m): m is Light => m instanceof Light);
+      return !left.some((c) => this.atRed(c, lights));
+    })();
+    let end = this.alive === 0 || stuck || this.framesSinceGain > LEADER_PATIENCE;
     if (survive && this.frames >= SURVIVE_FRAMES) {
       end = true;
       this.goalReached = this.cars.some((c) => !c.damaged && this.survived(c));
