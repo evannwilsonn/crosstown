@@ -4,44 +4,76 @@ import type { CurvePoint } from "../chart";
 import { Genome, Neat, type NeatJSON } from "../neat";
 import { mulberry32 } from "../utils";
 import { add, distance, lerp2D, normalize, rightOf, scale, subtract, type Point } from "./geom";
-import type { Marking } from "./markings";
+import { Light, Stop, type Marking } from "./markings";
 import { Navigator } from "./nav";
 import type { World } from "./world";
 
 export type WorldDriveMode = "off" | "AI" | "KEYS";
 
 /**
- * The world's levels. Each one keeps the same brains and asks more of them: stay on the road,
- * then get somewhere, then get anywhere (so the brain must really follow directions instead of
- * memorizing one trip), then get anywhere from anywhere.
+ * The world's levels never run out. Level 1 is the course's challenge: stay on the road. Every
+ * level after it is timed trips to random destinations: each trip has a time limit worked out
+ * from its own route (the ideal time at top speed, plus time for each turn, stop sign and
+ * traffic light), times a factor that shrinks level by level but never below what is drivable.
+ * Trips get longer and later levels start from random spots too. Every three levels the map
+ * changes; a new map starts a little easier, like a new road on the highway.
  */
 export interface WorldLevel {
   number: number;
   name: string;
-  /** What clears the level: survive the time limit, arrive, or arrive on every trip of a generation. */
-  goal: "survive" | "arrive" | "every" | null;
-  /** New random destination each generation. */
-  randomDestination: boolean;
-  /** New random starting spot each generation. */
+  /** Which map the level is on: a new one every LEVELS_PER_MAP levels. */
+  map: number;
+  /** "survive": still driving at the time limit. "every": arrive in time on every trip of a generation. */
+  goal: "survive" | "every";
+  /** Shortest trip by road, in px (shorter if the map is small). */
+  minTrip: number;
+  /** Time limit as a multiple of the trip's ideal time. */
+  timeFactor: number;
   randomStart: boolean;
 }
 
-export const WORLD_LEVELS: WorldLevel[] = [
-  { number: 1, name: "Stay on the road", goal: "survive", randomDestination: false, randomStart: false },
-  { number: 2, name: "Find the destination", goal: "arrive", randomDestination: false, randomStart: false },
-  { number: 3, name: "Any destination", goal: "every", randomDestination: true, randomStart: false },
-  { number: 4, name: "Anywhere to anywhere", goal: null, randomDestination: true, randomStart: true },
-];
+export const LEVELS_PER_MAP = 3;
+/** The tightest clock: 30% over the ideal time, plus the allowances, stays drivable. */
+const MIN_TIME_FACTOR = 1.3;
+const DISTANCE_NAMES = ["Around the block", "Short trips", "Across the neighborhood", "Across town", "Long trips", "Cross-town runs"];
+
+export function worldLevelSpec(n: number): WorldLevel {
+  const map = Math.floor((n - 1) / LEVELS_PER_MAP);
+  if (n <= 1) return { number: 1, name: "Stay on the road", map: 0, goal: "survive", minTrip: 0, timeFactor: 3, randomStart: false };
+  const stage = (n - 1) % LEVELS_PER_MAP;
+  const tier = Math.max(0, map + stage - 1);
+  const timeFactor = Math.max(MIN_TIME_FACTOR, 2.4 - 0.1 * tier);
+  const clock = timeFactor >= 2.1 ? "easy clock" : timeFactor >= 1.8 ? "on schedule" : timeFactor >= 1.5 ? "tight clock" : "rush";
+  const where = DISTANCE_NAMES[Math.min(tier, DISTANCE_NAMES.length - 1)];
+  const randomStart = tier >= 2;
+  return {
+    number: n,
+    name: `${where}, ${clock}${randomStart ? ", any start" : ""}`,
+    map,
+    goal: "every",
+    minTrip: 450 + 120 * tier,
+    timeFactor,
+    randomStart,
+  };
+}
 
 /**
- * Levels with random trips score every brain on this many trips per generation. One random trip
+ * Every timed level scores each brain on this many random trips per generation. One random trip
  * is luck: a brain that happened to get an easy one would win. Several trips reward brains that
  * really follow directions.
  */
 export const TRIPS_PER_GENERATION = 3;
 
+/** Allowances added to a trip's ideal time, in frames. */
+const TURN_FRAMES = 45;
+const STOP_FRAMES = 80;
+const LIGHT_FRAMES = 150;
+const START_FRAMES = 60;
+
 export interface WorldSummary extends CurvePoint {
   levelUp: boolean;
+  /** Trips the best car reached in time, out of `trips`. */
+  inTime: number;
   /** Seconds the best car took on the last trip, if it arrived. */
   arrivedIn: number | null;
   /** Trips the best car arrived on, out of `trips`. */
@@ -66,11 +98,8 @@ const OUTPUTS = 4;
 const LEADER_PATIENCE = 600;
 /** Level 1 is passed by a car still driving at the time limit. */
 const SURVIVE_FRAMES = 60 * 45;
-const GENERATION_FRAMES = 60 * 60;
 /** Within this distance of the destination counts as arrived. */
 const ARRIVE_RADIUS = 40;
-/** Fitness for arriving, on top of the distance covered; every frame to spare adds one more. */
-const ARRIVE_BONUS = 1000;
 /** Cars may wait this long without progress, enough for a full red light. */
 const CAR_STALL_FRAMES = 600;
 const SENSOR_REACH = 220;
@@ -108,8 +137,15 @@ export class WorldSim {
   neat: Neat;
   history: WorldSummary[] = [];
   last: WorldSummary | null = null;
-  /** Which trip of the generation is running (random levels drive several). */
+  /** Which trip of the generation is running. */
   trip = 0;
+  /** This trip's time limit, in frames (null on level 1). */
+  timeLimit: number | null = null;
+  /** Frames since this trip started. */
+  frames = 0;
+  /** Called when a level starts on a different map, so the page can load it before cars spawn. */
+  onMapChange?: (map: number) => void;
+  private currentMap = 0;
   destination: Point | null = null;
   /** Where this generation starts and which way it faces. */
   origin: { center: Point; direction: Point } | null = null;
@@ -120,17 +156,16 @@ export class WorldSim {
   private trips = new Map<Car, Trip>();
   /** Score so far this generation, per genome, summed over trips. */
   private totals: number[] = [];
-  /** Trips each genome arrived on this generation. */
+  /** Trips each genome reached in time this generation. */
   private arrivals: number[] = [];
   private leaderBest = 0;
   private framesSinceGain = 0;
-  private frames = 0;
   private goalReached = false;
 
   constructor(private world: () => World, saved: WorldSaved | null = null) {
     if (saved) {
       this.neat = Neat.fromJSON(saved.neat);
-      this.level = Math.min(WORLD_LEVELS.length, Math.max(1, saved.level));
+      this.level = Math.max(1, saved.level);
       this.generation = saved.generation;
       this.history = saved.history ?? [];
       this.last = this.history[this.history.length - 1] ?? null;
@@ -140,11 +175,11 @@ export class WorldSim {
   }
 
   get tripsPerGeneration(): number {
-    return this.levelSpec.randomDestination ? TRIPS_PER_GENERATION : 1;
+    return this.levelSpec.goal === "survive" ? 1 : TRIPS_PER_GENERATION;
   }
 
   get levelSpec(): WorldLevel {
-    return WORLD_LEVELS[this.level - 1];
+    return worldLevelSpec(this.level);
   }
 
   get start(): Marking | undefined {
@@ -184,34 +219,59 @@ export class WorldSim {
   }
 
   /**
-   * Where this generation starts and drives to. Levels 1 and 2: the Start marking to the
-   * Target marking (or, without one, the road point farthest from the start). Level 3: a new
-   * random destination each generation. Level 4: random start too.
+   * Where this trip starts and drives to: from the Start marking (or, on later levels, a random
+   * spot) to a random spot at least the level's trip length away by road. On a small map the
+   * trip length is capped to what the map can offer.
    */
   private chooseTrip(): void {
     const w = this.world();
     const spec = this.levelSpec;
-    const rand = mulberry32(this.generation * 7919 + this.level * 31 + this.trip);
+    const rand = mulberry32((this.generation * 7919 + this.level * 31 + this.trip * 104729) >>> 0);
     const marking = this.start!;
     this.origin = spec.randomStart ? this.randomRoadSpot(rand) : { center: marking.center, direction: marking.direction };
     const from = new Navigator(w.graph, this.origin.center);
-    const target = w.markings.find((m) => m.type === "target");
-    if (!spec.randomDestination && target) {
-      this.destination = target.center;
-      return;
+    let reach = 0;
+    w.graph.points.forEach((_, i) => {
+      const d = from.distanceFrom(i);
+      if (d < Infinity && d > reach) reach = d;
+    });
+    const want = Math.min(spec.minTrip, reach * 0.6);
+    let best: { p: Point; d: number } | null = null;
+    for (let tries = 0; tries < 40; tries++) {
+      const p = this.randomRoadSpot(rand).center;
+      const d = from.remaining(p);
+      if (d === Infinity) continue;
+      if (d >= want) {
+        best = { p, d };
+        break;
+      }
+      if (!best || d > best.d) best = { p, d };
     }
-    if (spec.randomDestination) {
-      for (let tries = 0; tries < 30; tries++) {
-        const p = this.randomRoadSpot(rand).center;
-        const d = from.remaining(p);
-        if (d > 700 && d < Infinity) {
-          this.destination = p;
-          return;
-        }
+    this.destination = best?.p ?? null;
+  }
+
+  /**
+   * A fair time limit for this trip: the route at top speed, plus time to slow for each turn,
+   * stop at each stop sign and wait at each light, times the level's factor.
+   */
+  private timeLimitFor(nav: Navigator, from: Point): number {
+    const w = this.world();
+    const path = nav.path(from);
+    let length = 0;
+    let turns = 0;
+    for (let i = 1; i < path.length; i++) {
+      length += distance(path[i - 1], path[i]);
+      if (i >= 2) {
+        const a = Math.atan2(path[i - 1].y - path[i - 2].y, path[i - 1].x - path[i - 2].x);
+        const b = Math.atan2(path[i].y - path[i - 1].y, path[i].x - path[i - 1].x);
+        if (Math.abs(Math.atan2(Math.sin(b - a), Math.cos(b - a))) > 0.5) turns++;
       }
     }
-    const reachable = w.graph.points.map((p, i) => ({ p, d: from.distanceFrom(i) })).filter((x) => x.d < Infinity);
-    this.destination = reachable.length ? reachable.reduce((a, b) => (b.d > a.d ? b : a)).p : null;
+    const onRoute = (m: Marking) => path.some((p, i) => i > 0 && distanceToSegment(m.center, path[i - 1], p) < 35);
+    const stops = w.markings.filter((m) => m instanceof Stop && onRoute(m)).length;
+    const lights = w.markings.filter((m) => m instanceof Light && onRoute(m)).length;
+    const ideal = length / 3 + turns * TURN_FRAMES + stops * STOP_FRAMES + lights * LIGHT_FRAMES + START_FRAMES;
+    return Math.round(ideal * this.levelSpec.timeFactor);
   }
 
   private spawn(): void {
@@ -221,6 +281,7 @@ export class WorldSim {
     const start = this.origin!;
     this.nav = this.destination ? new Navigator(w.graph, this.destination) : null;
     this.startRemaining = this.nav ? this.nav.remaining(start.center) : 0;
+    this.timeLimit = this.nav && this.levelSpec.goal !== "survive" ? this.timeLimitFor(this.nav, start.center) : null;
     const heading = Math.atan2(-start.direction.x, -start.direction.y);
     const make = (type: "AI" | "KEYS", brain?: Genome) => {
       const car = new Car(start.center.x, start.center.y, 30, 50, type);
@@ -244,6 +305,10 @@ export class WorldSim {
   }
 
   private startGeneration(): void {
+    if (this.levelSpec.map !== this.currentMap) {
+      this.currentMap = this.levelSpec.map;
+      this.onMapChange?.(this.currentMap);
+    }
     this.trip = 0;
     this.totals = this.neat.genomes.map(() => 0);
     this.arrivals = this.neat.genomes.map(() => 0);
@@ -251,18 +316,30 @@ export class WorldSim {
   }
 
   /**
-   * Fitness for this trip. Level 1: distance driven without crashing, as in the course. Level 2:
-   * how much closer by road the car got to the destination, plus a bonus for arriving that grows
-   * the sooner it arrives. Random-trip levels score the same way, scaled to the trip's length
-   * so long and short trips count equally.
+   * Fitness for this trip. Level 1: distance driven without crashing, as in the course. Timed
+   * levels: the share of the route covered, plus, only when the car arrives within the time
+   * limit, a bonus that grows with the time to spare. Each trip counts the same however long it is.
    */
   score(car: Car): number {
-    if (this.level === 1) return car.progress;
+    if (this.levelSpec.goal === "survive") return car.progress;
     const t = this.trips.get(car);
-    if (!t) return 0;
-    const progress = this.startRemaining - t.best;
-    const raw = t.arrivedAt === undefined ? progress : progress + ARRIVE_BONUS + (GENERATION_FRAMES - t.arrivedAt);
-    return this.levelSpec.randomDestination ? (raw / (this.startRemaining + ARRIVE_BONUS + GENERATION_FRAMES)) * 1000 : raw;
+    if (!t || this.startRemaining <= 0) return 0;
+    const covered = Math.max(0, Math.min(1, (this.startRemaining - t.best) / this.startRemaining));
+    const limit = this.timeLimit ?? Infinity;
+    const onTime = t.arrivedAt !== undefined && t.arrivedAt <= limit ? 1 + (limit - t.arrivedAt) / limit : 0;
+    return (covered + onTime) * 1000;
+  }
+
+  /** True when this car reached the destination within the time limit. */
+  inTime(car: Car): boolean {
+    const t = this.trips.get(car);
+    return t?.arrivedAt !== undefined && (this.timeLimit === null || t.arrivedAt <= this.timeLimit);
+  }
+
+  /** Seconds this car took to arrive on the current trip, if it has. */
+  arrivalSeconds(car: Car | null): number | null {
+    const at = car ? this.trips.get(car)?.arrivedAt : undefined;
+    return at === undefined ? null : at / 60;
   }
 
   /** Score so far this generation, including finished trips: what the chart and the leader use. */
@@ -309,7 +386,7 @@ export class WorldSim {
       t.remaining = g.remaining;
       t.waypoint = g.waypoint;
       if (g.remaining < t.best) t.best = g.remaining;
-      if (car.type === "AI" && !car.damaged && this.destination && distance(car, this.destination) < ARRIVE_RADIUS) {
+      if (!car.damaged && this.destination && distance(car, this.destination) < ARRIVE_RADIUS) {
         t.arrivedAt = this.frames;
         t.best = 0;
         car.speed = 0;
@@ -319,9 +396,9 @@ export class WorldSim {
     this.leader = this.cars.reduce((a, b) => (this.total(b) > this.total(a) ? b : a));
     if (this.mode === "KEYS") return false;
 
-    // Random trips run until no car is still getting closer; fixed ones follow the leader.
-    const multi = this.levelSpec.randomDestination;
-    const progress = multi ? this.cars.reduce((sum, c) => sum + this.score(c), 0) : this.score(this.leader);
+    // Survival follows the leader; trips run until no car is still getting closer.
+    const survive = this.levelSpec.goal === "survive";
+    const progress = survive ? this.score(this.leader) : this.cars.reduce((sum, c) => sum + this.score(c), 0);
     if (progress > this.leaderBest + 1) {
       this.leaderBest = progress;
       this.framesSinceGain = 0;
@@ -329,15 +406,13 @@ export class WorldSim {
       this.framesSinceGain++;
     }
 
-    const goal = this.levelSpec.goal;
-    let end = this.alive === 0 || this.framesSinceGain > LEADER_PATIENCE || this.frames >= GENERATION_FRAMES;
-    if (goal === "survive" && this.frames >= SURVIVE_FRAMES) {
+    let end = this.alive === 0 || this.framesSinceGain > LEADER_PATIENCE;
+    if (survive && this.frames >= SURVIVE_FRAMES) {
       end = true;
       this.goalReached = this.alive > 0;
-    } else if (goal === "arrive" && this.trips.get(this.leader)?.arrivedAt !== undefined) {
-      end = true;
-      this.goalReached = true;
     }
+    // A trip is over a little after its time limit: nothing more can be earned but distance.
+    if (this.timeLimit !== null && this.frames >= this.timeLimit * 1.2) end = true;
     return end ? this.endTrip() : false;
   }
 
@@ -345,7 +420,7 @@ export class WorldSim {
   private endTrip(): boolean {
     this.cars.forEach((c, i) => {
       this.totals[i] = (this.totals[i] ?? 0) + this.score(c);
-      if (this.trips.get(c)?.arrivedAt !== undefined) this.arrivals[i] = (this.arrivals[i] ?? 0) + 1;
+      if (this.inTime(c)) this.arrivals[i] = (this.arrivals[i] ?? 0) + 1;
     });
     if (this.trip < this.tripsPerGeneration - 1) {
       this.trip++;
@@ -372,7 +447,7 @@ export class WorldSim {
     if (this.levelSpec.goal === "every") this.goalReached = this.arrivals.some((a) => a >= this.tripsPerGeneration);
     this.neat.evolve(this.totals);
     const champ = this.neat.champion!;
-    const levelUp = this.goalReached && this.level < WORLD_LEVELS.length;
+    const levelUp = this.goalReached;
     this.last = {
       generation: this.generation,
       level: this.level,
@@ -381,6 +456,7 @@ export class WorldSim {
       levelUp,
       arrivedIn: arrivedAt === undefined ? null : arrivedAt / 60,
       arrivedTrips: this.arrivals[best] ?? 0,
+      inTime: this.arrivals[best] ?? 0,
       trips: this.tripsPerGeneration,
       neurons: champ.hiddenCount,
       connections: champ.enabledCount,
@@ -416,4 +492,12 @@ export class WorldSim {
       history: this.history.slice(-120),
     };
   }
+}
+
+function distanceToSegment(p: Point, a: Point, b: Point): number {
+  const abx = b.x - a.x;
+  const aby = b.y - a.y;
+  const len2 = abx * abx + aby * aby || 1;
+  const t = Math.max(0, Math.min(1, ((p.x - a.x) * abx + (p.y - a.y) * aby) / len2));
+  return Math.hypot(p.x - (a.x + abx * t), p.y - (a.y + aby * t));
 }

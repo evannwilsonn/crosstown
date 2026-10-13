@@ -215,3 +215,30 @@ describe("world levels and navigation", () => {
     expect(sim.last!.trips).toBe(TRIPS_PER_GENERATION);
   });
 });
+
+describe("timed world levels", () => {
+  it("never run out, never tighten the clock past what is drivable, and change map every three levels", async () => {
+    const { worldLevelSpec } = await import("../src/world/sim");
+    expect(worldLevelSpec(1).goal).toBe("survive");
+    for (let n = 2; n < 120; n++) {
+      const s = worldLevelSpec(n);
+      expect(s.goal).toBe("every");
+      expect(s.timeFactor).toBeGreaterThanOrEqual(1.3);
+      expect(s.map).toBe(Math.floor((n - 1) / 3));
+    }
+    expect(worldLevelSpec(60).minTrip).toBeGreaterThan(worldLevelSpec(5).minTrip);
+  });
+
+  it("gives every trip a time limit longer than driving its route flat out", async () => {
+    const w = sampleWorld();
+    const sim = new WorldSim(() => w);
+    sim.population = 3;
+    sim.level = 2;
+    sim.begin("AI");
+    expect(sim.destination).not.toBeNull();
+    const { Navigator } = await import("../src/world/nav");
+    const nav = new Navigator(w.graph, sim.destination!);
+    const flatOut = nav.remaining(sim.origin!.center) / 3; // frames at top speed, no turns or lights
+    expect(sim.timeLimit!).toBeGreaterThan(flatOut * 1.3);
+  });
+});

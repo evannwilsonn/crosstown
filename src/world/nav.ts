@@ -90,6 +90,31 @@ export class Navigator {
     return best;
   }
 
+  /** The road route from `p` to the destination, as the points to drive through. */
+  path(p: Point): Point[] {
+    const seg = this.nearestSegment(p);
+    const s = this.graph.segments[seg];
+    if (!s) return [p, this.destination];
+    if (seg === this.destSegment) return [p, this.destination];
+    let first = -1;
+    let best = Infinity;
+    for (const end of [s.p1, s.p2]) {
+      const i = this.index.get(`${end.x},${end.y}`);
+      if (i === undefined || this.dist[i] === Infinity) continue;
+      const d = distance(p, end) + this.dist[i];
+      if (d < best) {
+        best = d;
+        first = i;
+      }
+    }
+    const out = [p];
+    for (let i = first, guard = 0; i >= 0 && guard < this.graph.points.length; i = this.next[i], guard++) {
+      out.push(this.graph.points[i]);
+    }
+    out.push(this.destination);
+    return out;
+  }
+
   /** Road distance from `p` to the destination. */
   remaining(p: Point): number {
     return this.guide(p, this.nearestSegment(p)).remaining;

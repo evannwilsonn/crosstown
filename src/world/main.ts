@@ -307,7 +307,7 @@ function frame(nowMs: number): void {
       ? "0 m"
       : sim.level === 1
         ? meters(sim.leader.progress)
-        : `${meters(sim.remaining(sim.leader))} to go${sim.tripsPerGeneration > 1 ? `, trip ${sim.trip + 1} of ${sim.tripsPerGeneration}` : ""}`;
+        : `${meters(sim.remaining(sim.leader))} to go, ${(sim.frames / 60).toFixed(0)} of ${((sim.timeLimit ?? 0) / 60).toFixed(0)} s${sim.tripsPerGeneration > 1 ? `, trip ${sim.trip + 1}/${sim.tripsPerGeneration}` : ""}`;
     ui.level.textContent = `${sim.level}: ${sim.levelSpec.name}`;
     const g = sim.leader?.brain instanceof Genome ? sim.leader.brain : null;
     ui.brainNote.textContent = g ? `${g.hiddenCount} hidden ${g.hiddenCount === 1 ? "neuron" : "neurons"}, ${g.enabledCount} links, ${sim.neat.species.length || 1} species` : "";
@@ -340,12 +340,10 @@ new ResizeObserver(() => fit(brainCanvas, brainCtx)).observe(brainCanvas);
 /* Levels, the trip and the learning curve */
 function describeLevel(): string {
   const spec = sim.levelSpec;
-  const what = {
-    1: "drive as long as they can without crashing.",
-    2: "reach the destination. A GPS input tells each brain which way it is; the brain still does all the steering.",
-    3: `reach a new random destination each trip, ${sim.tripsPerGeneration} trips a generation. Clear it by arriving on every trip.`,
-    4: "random start, random destination, every trip. No final goal: the brains just keep getting better at it.",
-  }[spec.number];
+  const what =
+    spec.goal === "survive"
+      ? "drive as long as they can without crashing."
+      : `reach a random destination before the clock runs out, ${sim.tripsPerGeneration} trips a generation. A GPS input points the way; the brain does all the steering. Clear it by arriving in time on every trip.`;
   return `Level ${spec.number}, ${spec.name}: ${what}`;
 }
 
@@ -353,7 +351,7 @@ function describeGeneration(): string {
   const s = sim.last;
   if (!s) return describeLevel();
   if (s.levelUp) return `Generation ${s.generation} cleared level ${s.level}. ${describeLevel()}`;
-  const arrived = s.level === 1 ? "" : s.trips > 1 ? ` Its best car arrived on ${s.arrivedTrips} of ${s.trips} trips.` : s.arrivedIn !== null ? ` Its best car arrived in ${s.arrivedIn.toFixed(1)} s.` : "";
+  const arrived = s.trips > 1 ? ` Its best car arrived in time on ${s.inTime} of ${s.trips} trips.` : "";
   if (s.grew) return `Generation ${s.generation}'s best brain grew a neuron: ${s.neurons} hidden now.${arrived}`;
   return `Generation ${s.generation}: ${s.species} species competing.${arrived}`;
 }

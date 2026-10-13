@@ -1,6 +1,6 @@
 // Headless trainer for the virtual world: runs NEAT on the sample town and prints each
 // generation's level, best score, arrival time and brain size.
-// Usage: npx tsx scripts/train-world.ts [generations] [cars] [mutation]
+// Usage: npx tsx scripts/train-world.ts [generations] [cars] [mutation] [start level]
 import { sampleWorld } from "../src/world/sample";
 import { WorldSim } from "../src/world/sim";
 
@@ -12,6 +12,7 @@ const world = sampleWorld();
 const sim = new WorldSim(() => world);
 sim.population = pop;
 sim.mutation = mutation;
+sim.level = Number(process.argv[5] ?? 1);
 if (!sim.begin("AI")) throw new Error("the sample town has no start marking");
 const t0 = Date.now();
 while (sim.generation <= gens) {
@@ -24,7 +25,7 @@ while (sim.generation <= gens) {
   const s = sim.last!;
   console.log(
     `gen ${g}: level ${s.level}${s.levelUp ? " CLEARED" : ""}, best ${Math.round(s.best)}` +
-      `, arrived ${s.arrivedTrips}/${s.trips}${s.arrivedIn !== null ? ` (last in ${s.arrivedIn.toFixed(1)} s)` : ""}` +
+      `, in time ${s.inTime}/${s.trips}` +
       `, brain ${s.neurons} hidden / ${s.connections} links, ${s.species} species${s.grew ? ", GREW" : ""}, ${frames} frames, ${((Date.now() - t0) / 1000).toFixed(0)} s`,
   );
 }
