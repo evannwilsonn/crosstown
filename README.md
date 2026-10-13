@@ -1,21 +1,19 @@
-# Self-Driving Car + Virtual World
+# Crosstown
 
-Two pages where cars learn to drive from nothing. No training data and no pretrained brains: every visit starts with a population of random, minimal networks, and NEAT grows them, adding neurons and connections as the challenges get harder. The levels never run out.
+Cars learn to drive a town from nothing and reach random destinations against the clock. No training data and no pretrained brains: every visit starts with a population of random, minimal networks, and NEAT grows them, adding neurons and connections as the challenges get harder. A new town is generated every few levels, each with its own look and its own hazard, and the levels never run out. You can also draw your own map or import a real one from OpenStreetMap and train on that.
 
-- **Highway** (`index.html`): get past traffic on a road that keeps changing. It curves, narrows to two lanes, closes lanes for construction and moves through different scenery.
-- **Virtual world** (`world.html`): learn the streets of a town and reach random destinations against the clock. A new town is generated every three levels. You can also draw your own map or import a real one and train on that.
+Written in TypeScript with the Canvas API. It started as a port of Radu Mariescu-Istodor's freeCodeCamp [Virtual world](https://github.com/gniziemazity/virtual-world) course (MIT). It was rebuilt with typed modules and tests, then taken in its own direction: growing NEAT brains instead of a fixed network, unlimited procedurally generated towns, timed GPS trips, hazards and themed worlds.
 
-Written in TypeScript with the Canvas API. It started as a port of Radu Mariescu-Istodor's two freeCodeCamp courses ([Self-driving car](https://github.com/gniziemazity/Self-driving-car), [Virtual world](https://github.com/gniziemazity/virtual-world), both MIT). It was rebuilt with typed modules and tests, then taken in its own direction: growing NEAT brains instead of a fixed network, unlimited procedurally generated levels, timed GPS trips and themed worlds.
+Sister project: [Fastlane](https://github.com/evannwilsonn/fastlane), where the same kind of brains learn to get past traffic on a highway that never ends.
 
 ## Run it
 
 ```bash
 npm install
-npm run dev      # local dev server: / is the highway, /world.html is the virtual world
-npm test         # unit tests (Vitest)
-npm run build    # both pages to dist/
-SINGLE=index npm run build   # one self-contained HTML file in dist-single/index/
-SINGLE=world npm run build   # one self-contained HTML file in dist-single/world/
+npm run dev               # local dev server
+npm test                  # unit tests (Vitest)
+npm run build             # dist/
+SINGLE=1 npm run build    # one self-contained HTML file in dist-single/
 ```
 
 Use the arrow keys or W A S D to drive in "Drive it yourself" mode.
@@ -25,57 +23,14 @@ Use the arrow keys or W A S D to drive in "Drive it yourself" mode.
 | Step | In this project |
 | --- | --- |
 | Problem | Drive with no labelled data, and keep improving as the challenge grows. |
-| Inputs | Seven ray sensors across 180 degrees (0 when a ray sees nothing, rising to 1 as an obstacle gets close) plus the car's speed. In the world, a GPS input and a road-condition input are added as well. |
+| Inputs | Seven ray sensors across 180 degrees (0 when a ray sees nothing, rising to 1 as an obstacle gets close), the car's speed, a GPS input and a road-condition input. |
 | Starting point | Generation 1 is random minimal networks: inputs wired straight to 4 controls (forward, left, right, reverse), no hidden neurons. |
 | Model | A NEAT genome (`src/neat.ts`, after Stanley & Miikkulainen 2002): any acyclic network of step neurons, with as many hidden neurons as evolution has added. |
 | Breeding | Brains are grouped into species by structure and compete mostly within their species, so a new neuron gets time to prove itself. Parents cross over gene by gene using innovation numbers. Mutations nudge weights and sometimes add a connection or split one with a new neuron. The best brain rides unchanged into the next generation, so progress never goes backwards. |
-| Self-improvement | Unlimited levels on both pages. The leader's brain is drawn live as it grows, and a learning curve charts every generation by level, with a dot wherever the best brain gained a neuron. |
+| Self-improvement | Unlimited levels. The leader's brain is drawn live as it grows, and a learning curve charts every generation by level, with a dot wherever the best brain gained a neuron. |
 | Memory | Learning lasts for the browser tab session. Refreshing, or leaving and coming back in the same tab, keeps the brains and the level. Closing the tab or window starts over from random brains. |
 
-## Highway
-
-**Fitness** is distance gained on the traffic, not raw distance. Traffic moves forward too, so raw distance rewards tailgating, and a tailgater never learns to overtake.
-
-**New traffic every generation.** Every generation gets newly generated traffic, level 1 included, so a brain can't memorize a layout. Each brain drives **two layouts per generation** and is scored on both. To clear a level, the goal has to be reached on **3 different layouts**. One lucky run isn't enough.
-
-With a single layout per generation, a brain that happened to get easy traffic won, then failed the next generation's traffic, and the population swung back and forth instead of improving. That showed most on the first curvy road (level 7), where some populations stalled for 100+ generations.
-
-**Inputs:** seven rays across 180 degrees, the car's speed, the road ahead, and the road condition.
-
-- **Road ahead** is which way the road bends about 15 m on, compared with where the car points: what a driver sees through the windshield on a curve. Most crashes on curves were cars running off the edge, because the rays alone only show the road's edge once it's close.
-- **Road condition** reads 0 dry, 0.5 wet and 1 icy.
-
-Both are sensors, not knowledge: brains still start random and have to learn what they mean.
-
-**Levels never run out**, and the road changes every three levels:
-
-| Road | Levels | What changes |
-| --- | --- | --- |
-| 1 | 1-3 | Three straight lanes. Level 1 is the course's seven cars, in a random arrangement. |
-| 2 | 4-6 | Two lanes, through the desert. Level 6: a sandstorm |
-| 3 | 7-9 | Curves, along the coast. Level 9: rain |
-| 4 | 10-12 | Construction zones that close a lane, downtown at night. Level 12: fog at night |
-| 5 | 13-15 | Curves, lane closures and two or three lanes, over a snowy pass. Level 15: black ice and falling snow |
-| 6+ | 16+ | Random mixes of the above, getting tighter, with each road's weather on its third level |
-
-- **Traffic difficulty.** Within each road, traffic gets denser and faster. Each new road starts a little easier, so the brains get a foothold on the new shape.
-- **Traffic behavior.** Later levels give lanes different speeds and add cars that change lanes.
-- **Generated so it stays passable.** Traffic follows its lane, merges out of closed lanes and never blocks every lane.
-
-**Weather.** From the second road on, each road's third level brings its weather instead of denser traffic, so each level still adds one thing. The weather comes from the same hazards as the virtual world (`world/hazards.ts`):
-
-- sandstorms and fog shorten what the sensors can see,
-- rain cuts grip,
-- black ice gives almost none, and falling snow cuts sight a little,
-- the night road is dark on every level: past the headlights, the side sensors see much less.
-
-Lane closures follow the weather too: snowdrifts on the snowy pass, flooding on the coast, sand drifts in the desert, and road works elsewhere.
-
-**Themes:** the road moves through the original highway, a desert highway, a coast road, downtown at night (with headlights) and a snowy mountain pass, then mixes them. Road layouts are random for each session.
-
-`npx tsx scripts/train.ts [generations] [cars] [mutation] [frame cap] [start level]` runs the highway headless and prints each generation's level, clears, cars passed and brain size. Two test runs with the same seeds took 1,600 and 2,050 seconds of training to clear level 9 with one layout per generation and no road-ahead input. With both changes, the same runs took 1,000 seconds or less. Level 7 took 46 to 59 generations instead of 76.
-
-## Virtual world
+## The town
 
 The world builds a town around a road network: road borders, buildings and trees in pseudo 3D, road markings with working traffic lights, OpenStreetMap import and a minimap.
 
@@ -102,7 +57,7 @@ Navigation never steers. The brain has to learn to follow the arrow and stay on 
 | --- | --- | --- |
 | Downtown | Pedestrians | People wait at the curb and walk the crosswalks on the simulation's clock. The sensors see them, and hitting one is a crash |
 | Desert | Sandstorm | Every sensor sees less than half as far |
-| Snowy | Black ice | Snow cuts grip everywhere, and patches of ice on the trips' routes give almost none. Cars slide wide and take longer to stop |
+| Snowy | Black ice | Falling snow cuts sight, snow cuts grip everywhere, and patches of ice on the trips' routes give almost none. Cars slide wide and take longer to stop |
 | Coastal | Sea fog | Every sensor sees less than half as far |
 | Autumn | Rain | Wet roads cut grip, so fast turns slide |
 | Dusk and night towns | Darkness, on every level | Past the headlights the side sensors see less (much less at night), except under the street lamp at every junction |
@@ -116,7 +71,7 @@ Grip is modelled simply: with less grip the car's direction of travel lags its h
 
 1. **Staying on the road (level 1)** is the course's challenge. Fitness is distance driven. It's cleared when a car is still driving at 45 s and has covered at least 300 m away from the start, so circling in place doesn't count.
 2. **Every other level is three timed trips** from the town's Start marking to the same target, the red pin. A level picks its target at random once and keeps it until the level is cleared, so every generation faces the same test. A level is cleared when one brain arrives in time on all three trips. Reset learning picks new targets; a refresh keeps them.
-3. **Detours.** On detour levels, trip 2 closes a street on the route trip 1 would take, and trip 3 keeps that closure and closes another on trip 2's route. Every trip needs a different way to the same target. Closed streets get orange barricades that the sensors see as walls, and the GPS routes around them. A street is only closed if the target stays reachable and the detour stays reasonable (at most about 1.6 times the direct route, or 90 m more).
+3. **Detours.** On detour levels, trip 2 closes a street on the route trip 1 would take, and trip 3 keeps that closure and closes another on trip 2's route. Every trip needs a different way to the same target. Closed streets get barricades that the sensors see as walls, and the GPS routes around them. A street is only closed if the target stays reachable and the detour stays reasonable (at most about 1.6 times the direct route, or 90 m more).
 
 **Fair time limits.** Each trip's limit is worked out from its own route, closures included: the ideal time at top speed, plus time for each turn, stop sign and traffic light, times the level's factor. A longer detour gets more time.
 
@@ -181,27 +136,35 @@ Other deliberate differences from the course:
 src/
   neat.ts        NEAT: genomes, innovation numbers, speciation, crossover, growth
   network.ts     the course's fixed-shape network (kept for reference and tests)
-  sensor.ts      ray casting against road edges and nearby traffic
-  car.ts         physics, collision, progress tracking, drawing
-  road.ts        road shapes: lanes, curves, construction zones, cones
-  traffic.ts     seeded traffic: lane speeds, lane changes, merges
-  themes.ts      highway themes and scenery
-  simulation.ts  highway levels, generations, NEAT breeding, saving
-  chart.ts       learning curve shared by both pages
+  sensor.ts      ray casting against road edges and nearby obstacles
+  car.ts         physics, grip, collision, progress tracking, drawing
+  chart.ts       learning curve
   visualizer.ts  draws the leader's network live
-  main.ts        highway canvas, UI controls, session storage
-  world/         geometry, graph, world generation, markings, editors, viewport, OSM, minimap,
-                 navigation (nav.ts), level maps (mapgen.ts), themes and scenery, hazards
-                 (hazards.ts), town traffic (citytraffic.ts), sim, sharing (share.ts)
-tests/core.test.ts, tests/world.test.ts
+  world/
+    geom.ts, graph.ts          points, segments, polygons, the road graph
+    world.ts                   roads, buildings and trees
+    markings.ts, editors.ts    road markings and the editors
+    viewport.ts, minimap.ts    camera and minimap
+    osm.ts, sample.ts          OpenStreetMap import, the sample town
+    nav.ts                     GPS routing
+    mapgen.ts                  generated level towns
+    worldThemes.ts, items.ts,
+    scenery.ts                 town looks
+    hazards.ts                 pedestrians, weather, darkness
+    citytraffic.ts             town traffic
+    sim.ts                     levels, trips, NEAT breeding, saving
+    share.ts                   opt-in map sharing
+    main.ts                    canvas, UI controls, session storage
+scripts/train-world.ts         headless trainer
+tests/world.test.ts
 ```
 
 ## Design notes
 
-The interface borrows from US highway signage. It uses Overpass (an open-source revival of Highway Gothic), green guide signs for the title and progress, real lane paint on the road, and construction orange reserved for the main action. In the network view, yellow connections excite a neuron and blue ones inhibit it.
+The interface borrows from US highway signage. It uses Overpass (an open-source revival of Highway Gothic), green guide signs for the title and progress, and construction orange reserved for the main action. In the network view, yellow connections excite a neuron and blue ones inhibit it.
 
 ## Credits and licences
 
-- The courses this started from are © Radu Mariescu-Istodor, MIT licence. See `public/samples/COURSE-LICENSE.txt`, which also covers the converted course city.
+- The course this started from is © Radu Mariescu-Istodor, MIT licence. See `public/samples/COURSE-LICENSE.txt`, which also covers the converted course city.
 - Map data from OpenStreetMap is © OpenStreetMap contributors and available under the [Open Database License (ODbL)](https://www.openstreetmap.org/copyright). The page shows this credit whenever an OpenStreetMap map is loaded. If you share a database built from OSM data, ODbL's share-alike terms apply to it.
 - NEAT: Kenneth O. Stanley and Risto Miikkulainen, "Evolving Neural Networks through Augmenting Topologies", 2002.
