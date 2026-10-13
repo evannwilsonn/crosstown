@@ -1,4 +1,5 @@
 import type { Road } from "./road";
+import type { Hazard } from "./world/hazards";
 import { mulberry32 } from "./utils";
 
 /**
@@ -15,6 +16,8 @@ export interface HighwayTheme {
   /** Paint for the learning cars that aren't leading, chosen to show on this ground. */
   ghost: string;
   night?: boolean;
+  /** The weather this road brings on its third level: it changes the driving, not just the look. */
+  hazard?: Hazard;
   scenery: (ctx: CanvasRenderingContext2D, road: Road, viewTop: number, viewBottom: number, seed: number) => void;
 }
 
@@ -130,6 +133,7 @@ export const HIGHWAY_THEMES: HighwayTheme[] = [
   { name: "Highway", ground: "", shoulder: "", asphalt: "", ghost: "", scenery: () => {} },
   {
     name: "Desert highway",
+    hazard: "sandstorm",
     ground: "#c8a36b",
     shoulder: "#b08a55",
     asphalt: "#3b3632",
@@ -144,6 +148,7 @@ export const HIGHWAY_THEMES: HighwayTheme[] = [
   },
   {
     name: "Coast road",
+    hazard: "rain",
     ground: "#4f8a4f",
     shoulder: "#d9c48f",
     asphalt: "#33373b",
@@ -183,6 +188,7 @@ export const HIGHWAY_THEMES: HighwayTheme[] = [
   },
   {
     name: "Downtown at night",
+    hazard: "fog",
     ground: "#0e1016",
     shoulder: "#1b1e26",
     asphalt: "#22252d",
@@ -221,6 +227,7 @@ export const HIGHWAY_THEMES: HighwayTheme[] = [
   },
   {
     name: "Snowy mountain pass",
+    hazard: "ice",
     ground: "#e8eef2",
     shoulder: "#c9d3da",
     asphalt: "#3a4048",

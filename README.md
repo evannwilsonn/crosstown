@@ -36,25 +36,44 @@ Use the arrow keys or W A S D to drive in "Drive it yourself" mode.
 
 **Fitness** is distance gained on the traffic, not raw distance. Traffic moves forward too, so raw distance rewards tailgating, and a tailgater never learns to overtake.
 
-**New traffic every generation.** Every generation gets newly generated traffic, level 1 included, so a brain can't memorize a layout. To clear a level, the best car has to reach the goal on **3 different generations**. One lucky run isn't enough.
+**New traffic every generation.** Every generation gets newly generated traffic, level 1 included, so a brain can't memorize a layout. Each brain drives **two layouts per generation** and is scored on both. To clear a level, the goal has to be reached on **3 different layouts**. One lucky run isn't enough.
+
+With a single layout per generation, a brain that happened to get easy traffic won, then failed the next generation's traffic, and the population swung back and forth instead of improving. That showed most on the first curvy road (level 7), where some populations stalled for 100+ generations.
+
+**Inputs:** seven rays across 180 degrees, the car's speed, the road ahead, and the road condition.
+
+- **Road ahead** is which way the road bends about 15 m on, compared with where the car points: what a driver sees through the windshield on a curve. Most crashes on curves were cars running off the edge, because the rays alone only show the road's edge once it's close.
+- **Road condition** reads 0 dry, 0.5 wet and 1 icy.
+
+Both are sensors, not knowledge: brains still start random and have to learn what they mean.
 
 **Levels never run out**, and the road changes every three levels:
 
 | Road | Levels | What changes |
 | --- | --- | --- |
 | 1 | 1-3 | Three straight lanes. Level 1 is the course's seven cars, in a random arrangement. |
-| 2 | 4-6 | Two lanes |
-| 3 | 7-9 | Curves |
-| 4 | 10-12 | Construction zones that close a lane, with cones and merges |
-| 5+ | 13+ | Random mixes of the above, getting tighter |
+| 2 | 4-6 | Two lanes, through the desert. Level 6: a sandstorm |
+| 3 | 7-9 | Curves, along the coast. Level 9: rain |
+| 4 | 10-12 | Construction zones that close a lane, downtown at night. Level 12: fog at night |
+| 5 | 13-15 | Curves, lane closures and two or three lanes, over a snowy pass. Level 15: black ice and falling snow |
+| 6+ | 16+ | Random mixes of the above, getting tighter, with each road's weather on its third level |
 
 - **Traffic difficulty.** Within each road, traffic gets denser and faster. Each new road starts a little easier, so the brains get a foothold on the new shape.
 - **Traffic behavior.** Later levels give lanes different speeds and add cars that change lanes.
 - **Generated so it stays passable.** Traffic follows its lane, merges out of closed lanes and never blocks every lane.
 
+**Weather.** From the second road on, each road's third level brings its weather instead of denser traffic, so each level still adds one thing. The weather comes from the same hazards as the virtual world (`world/hazards.ts`):
+
+- sandstorms and fog shorten what the sensors can see,
+- rain cuts grip,
+- black ice gives almost none, and falling snow cuts sight a little,
+- the night road is dark on every level: past the headlights, the side sensors see much less.
+
+Lane closures follow the weather too: snowdrifts on the snowy pass, flooding on the coast, sand drifts in the desert, and road works elsewhere.
+
 **Themes:** the road moves through the original highway, a desert highway, a coast road, downtown at night (with headlights) and a snowy mountain pass, then mixes them. Road layouts are random for each session.
 
-`npx tsx scripts/train.ts [generations] [cars] [mutation] [frame cap] [start level]` runs the highway headless and prints each generation's level, clears, cars passed and brain size.
+`npx tsx scripts/train.ts [generations] [cars] [mutation] [frame cap] [start level]` runs the highway headless and prints each generation's level, clears, cars passed and brain size. Two test runs with the same seeds took 1,600 and 2,050 seconds of training to clear level 9 with one layout per generation and no road-ahead input. With both changes, the same runs took 1,000 seconds or less. Level 7 took 46 to 59 generations instead of 76.
 
 ## Virtual world
 

@@ -38,7 +38,7 @@ export const HAZARD_NAMES: Record<Hazard, string> = {
 export const HAZARD_HINTS: Record<Hazard, string> = {
   pedestrians: "people walk across the crosswalks, and hitting one is a crash, so cars have to slow down or wait",
   sandstorm: "blowing sand cuts every sensor to under half its reach",
-  ice: "the snow makes the roads slippery and patches of black ice on the way give almost no grip",
+  ice: "falling snow cuts how far the sensors see, the snow makes the roads slippery, and patches of black ice give almost no grip",
   fog: "thick fog cuts every sensor to under half its reach",
   rain: "wet roads give less grip, so fast turns slide wide and stopping takes longer",
   traffic: "other cars drive the streets, stop at red lights and queue at junctions; hitting one is a crash",
@@ -107,7 +107,8 @@ export function visibility(
   light: TimeOfDay,
   lamps: readonly Point[],
 ): number[] | null {
-  const haze = hazards.includes("fog") ? 0.42 : hazards.includes("sandstorm") ? 0.45 : 1;
+  // Falling snow on icy levels hides less than fog, but still hides.
+  const haze = hazards.includes("fog") ? 0.42 : hazards.includes("sandstorm") ? 0.45 : hazards.includes("ice") ? 0.7 : 1;
   if (light === "day" && haze === 1) return null;
   const side = light === "night" ? 0.4 : light === "dusk" ? 0.7 : 1;
   const lit = side < 1 && lamps.some((p) => Math.abs(p.x - car.x) < LAMP_RADIUS && Math.abs(p.y - car.y) < LAMP_RADIUS && Math.hypot(p.x - car.x, p.y - car.y) < LAMP_RADIUS);

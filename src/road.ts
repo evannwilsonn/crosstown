@@ -155,6 +155,8 @@ export class Road {
     colors: { surface: string; shoulder: string; lane: string; edge: string; center: string; cone?: string },
     viewTop: number,
     viewBottom: number,
+    /** What closes the lane: road works, or the weather (snowdrifts, flooding, sand drifts). */
+    closure: "construction" | "snow" | "flood" | "sand" = "construction",
   ): void {
     const step = 20;
     const ys: number[] = [];
@@ -193,7 +195,12 @@ export class Road {
       // The closed area as one smooth shape between the road edge and the cone line.
       const closed = ys.filter((y) => (this.closure(y)?.amount ?? 0) > 0);
       if (closed.length > 1) {
-        ctx.fillStyle = "rgba(255, 122, 26, 0.16)";
+        ctx.fillStyle = {
+          construction: "rgba(255, 122, 26, 0.16)",
+          snow: "rgba(245, 248, 252, 0.9)",
+          flood: "rgba(40, 112, 150, 0.75)",
+          sand: "rgba(214, 178, 120, 0.9)",
+        }[closure];
         ctx.beginPath();
         closed.forEach((y, i) => {
           const c = this.closure(y)!;
@@ -212,8 +219,16 @@ export class Road {
       for (const y of closed) {
         const c = this.closure(y)!;
         const [l, r] = this.edgesAt(y);
+        const cx = c.lane === 0 ? l : r;
+        if (closure === "snow" || closure === "sand") {
+          // A drift piled along the edge of the closed lane.
+          ctx.fillStyle = closure === "snow" ? "#f7fafc" : "#dcb77c";
+          ctx.beginPath();
+          ctx.arc(cx, y, 9 + 4 * Math.sin(y * 0.07), 0, Math.PI * 2);
+          ctx.fill();
+          continue;
+        }
         if (Math.round(y / step) % 2 === 0) {
-          const cx = c.lane === 0 ? l : r;
           ctx.fillStyle = cone;
           ctx.beginPath();
           ctx.moveTo(cx, y - 7);

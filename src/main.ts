@@ -4,6 +4,8 @@ import { CLEARS_TO_PASS, INPUTS, levelSpec, roadShape, Simulation, type SavedSta
 import { drawGenome } from "./visualizer";
 import { drawLearningCurve } from "./chart";
 import { themeFor } from "./themes";
+import { HAZARD_HINTS, HAZARD_NAMES } from "./world/hazards";
+import { drawIce, drawWeather } from "./world/scenery";
 import type { Car } from "./car";
 
 // Learning lasts for the tab session: a refresh or leaving and coming back in the same tab picks
@@ -164,6 +166,7 @@ function drawRoad(): void {
     },
     viewTop,
     viewBottom,
+    theme.hazard === "ice" ? "snow" : theme.hazard === "sandstorm" ? "sand" : theme.hazard === "rain" ? "flood" : "construction",
   );
   theme.scenery(ctx, sim.road, viewTop, viewBottom, sim.settings.seed + sim.levelSpec.road);
   if (theme.night) {
@@ -171,6 +174,8 @@ function drawRoad(): void {
     headlights(ctx, leader);
   }
 
+  const ice = sim.iceNear(leader.y, viewH / scale);
+  if (ice.length) drawIce(ctx, ice);
   for (const car of sim.course.near(leader.y, viewH / scale)) car.draw(ctx, car.color ?? palette.concrete);
 
   ctx.globalAlpha = 0.16;
@@ -178,6 +183,8 @@ function drawRoad(): void {
   ctx.globalAlpha = 1;
 
   leader.draw(ctx, leader.damaged ? palette.concrete : palette.yellow, ui.sensors.checked ? palette.yellow : undefined);
+  const hazards = sim.hazards;
+  if (hazards.length) drawWeather(ctx, hazards, { center: { x: camX, y: leader.y }, radius: viewH / scale }, leader, sim.frames);
   ctx.restore();
 }
 
@@ -228,7 +235,9 @@ function updateStats(now: number): void {
   const goal = sim.levelSpec.goal;
   const passed = Math.max(sim.bestPassed, sim.passedBy(sim.leader));
   ui.run.textContent = goal ? `${passed} of ${goal}` : String(passed);
-  ui.level.textContent = `${sim.level}: ${sim.levelSpec.name} (${sim.clears}/${CLEARS_TO_PASS})`;
+  // The world's "Sea fog" is just fog on a city highway at night.
+  const weather = sim.hazards.map((h) => (h === "fog" && sim.light === "night" ? "Fog at night" : HAZARD_NAMES[h])).join(", ");
+  ui.level.textContent = `${sim.level}: ${weather || sim.levelSpec.name} (${sim.clears}/${CLEARS_TO_PASS})`;
   ui.brainNote.textContent = brainSummary();
 }
 
@@ -247,7 +256,9 @@ function describeGeneration(): string {
     const next = levelSpec(s.level + 1);
     const nextTheme = themeFor(next.road, sim.settings.seed);
     const road = next.road !== levelSpec(s.level).road ? ` New road: ${nextTheme.name}, ${roadShapeText(next.road)}.` : "";
-    return `Generation ${s.generation} cleared level ${s.level}.${road} Level ${next.number}: ${next.name}. Pass ${next.goal} cars on ${CLEARS_TO_PASS} different layouts.`;
+    const hazard = next.weather ? nextTheme.hazard : undefined;
+    const weather = hazard ? ` The traffic stays the same, but now: ${HAZARD_NAMES[hazard].toLowerCase()}. ${HAZARD_HINTS[hazard][0].toUpperCase()}${HAZARD_HINTS[hazard].slice(1)}.` : "";
+    return `Generation ${s.generation} cleared level ${s.level}.${road} Level ${next.number}: ${next.name}.${weather} Pass ${next.goal} cars on ${CLEARS_TO_PASS} different layouts.`;
   }
   if (s.cleared) return `Generation ${s.generation} passed ${s.passed} cars and cleared this layout: ${s.clears} of ${CLEARS_TO_PASS} needed for level ${s.level}.`;
   if (s.grew) return `Generation ${s.generation}'s best brain grew a neuron: ${s.neurons} hidden now. Passed ${s.passed} cars.`;

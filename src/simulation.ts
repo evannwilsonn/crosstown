@@ -1,4 +1,7 @@
 import { Car } from "./car";
+import { ICE_GRIP, onIce, RAIN_GRIP, roadCondition, SNOW_GRIP, visibility, type Hazard, type IcePatch } from "./world/hazards";
+import { hash2 } from "./world/items";
+import { themeFor, type HighwayTheme } from "./themes";
 import { Neat, type NeatJSON } from "./neat";
 import type { NetworkJSON } from "./network";
 import { Road, type RoadShape } from "./road";
@@ -43,6 +46,11 @@ export interface Level {
   goal: number;
   /** Which road the level is on: a new one every LEVELS_PER_ROAD levels. */
   road: number;
+  /**
+   * The road's third level brings its weather (sandstorm, rain, fog at night, ice) instead of
+   * denser traffic, so each level still adds just one thing.
+   */
+  weather: boolean;
 }
 
 export const LEVELS_PER_ROAD = 3;
@@ -60,11 +68,13 @@ const TRAFFIC_NAMES = ["Open road", "Light traffic", "Steady traffic", "Heavy tr
 export function levelSpec(n: number): Level {
   const road = Math.floor((n - 1) / LEVELS_PER_ROAD);
   if (n <= 1) {
-    return { number: 1, name: "Seven cars", layout: "seven", rowGap: 210, trafficSpeed: 2, laneSpread: 0, changeRate: 0, goal: 7, road };
+    return { number: 1, name: "Seven cars", layout: "seven", rowGap: 210, trafficSpeed: 2, laneSpread: 0, changeRate: 0, goal: 7, road, weather: false };
   }
   // Traffic tier: one step per level within a road, one step per road at each road's start.
   const stage = (n - 1) % LEVELS_PER_ROAD;
-  const k = road + stage - 1;
+  // From the second road on, the third level adds weather and keeps the second level's traffic.
+  const weather = road >= 1 && stage === 2;
+  const k = weather ? road : road + stage - 1;
   const laneSpread = k >= LANE_SPEEDS_FROM ? Math.min(0.4, 0.1 * (k - LANE_SPEEDS_FROM + 1)) : 0;
   const changeRate = k >= LANE_CHANGES_FROM ? Math.min(0.004, 0.001 * (k - LANE_CHANGES_FROM + 1)) : 0;
   const extras = [laneSpread ? "lanes at different speeds" : "", changeRate ? "drivers changing lanes" : ""].filter(Boolean);
@@ -79,6 +89,7 @@ export function levelSpec(n: number): Level {
     changeRate,
     goal: Math.min(MAX_GOAL, 15 + 2 * k),
     road,
+    weather,
   };
 }
 
@@ -155,13 +166,28 @@ export interface SavedState {
  */
 export const RAYS = 7;
 export const RAY_SPREAD = Math.PI;
-export const INPUTS = RAYS + 1;
+/**
+ * Plus the road ahead (which way the road bends about 15 m on, compared with where the car
+ * points: what a driver sees through the windshield on a curve) and the road condition (0 dry,
+ * 0.5 wet, 1 icy). These are sensors: the brains still start random and learn what they mean.
+ */
+export const INPUTS = RAYS + 3;
+/** How far ahead the road-ahead input looks. */
+const LOOK_AHEAD = 150;
+const rayAngles = Array.from({ length: RAYS }, (_, i) => RAY_SPREAD / 2 - (i / (RAYS - 1)) * RAY_SPREAD);
 const OUTPUTS = 4;
 /**
  * Traffic is new every generation, so one generation can get an easy layout. A level only counts
  * as passed once its goal has been reached on this many different layouts.
  */
 export const CLEARS_TO_PASS = 3;
+/**
+ * Every brain drives this many traffic layouts per generation and is scored on all of them. With
+ * one layout, a brain that happened to get an easy one won, then failed the next generation's
+ * traffic, and the population swung back and forth instead of improving (it showed most on
+ * curves). Each cleared layout counts towards CLEARS_TO_PASS.
+ */
+export const LAYOUTS_PER_GENERATION = 2;
 const LEADER_PATIENCE = 420; // frames the leader may go without gaining ground before the generation ends
 /** Safety limit on a generation's length, in frames. */
 const MAX_GENERATION_FRAMES = 60 * 240;
@@ -185,7 +211,7 @@ export class Simulation {
 
   private leaderBest = 0;
   private framesSinceLeaderGain = 0;
-  private frames = 0;
+  frames = 0;
   /** How far traffic has driven this generation. */
   private trafficTravel = 0;
   /** Best fitness per car: distance gained on the traffic, so tailgating scores nothing. */
@@ -217,7 +243,25 @@ export class Simulation {
   }
 
   /** Builds a fresh generation: one car per genome, on this level's traffic. */
+  /** Which of the generation's traffic layouts is being driven. */
+  trip = 0;
+  /** Each genome's score so far this generation, over the layouts already driven. */
+  private totals: number[] = [];
+  /** Layouts cleared so far this generation, and the most cars any leader passed. */
+  private tripClears = 0;
+  private passedThisGeneration = 0;
+
+  /** Starts a generation: its first traffic layout, with every brain's score at zero. */
   reset(): void {
+    this.trip = 0;
+    this.totals = this.neat.genomes.map(() => 0);
+    this.tripClears = 0;
+    this.passedThisGeneration = 0;
+    this.spawn();
+  }
+
+  /** Puts every brain at the start of the current layout. */
+  private spawn(): void {
     this.cars.forEach((c) => c.dispose());
     const spec = this.levelSpec;
     // The road stays the same for all of its levels, so the brains get a fair shot at it.
@@ -260,7 +304,7 @@ export class Simulation {
 
   /** Seed for this generation's traffic: depends on the session, the level and the generation. */
   trafficSeed(): number {
-    return (Math.imul(this.settings.seed ^ (this.level * 0x9e3779b1), 2654435761) + this.generation * 7919) >>> 0;
+    return (Math.imul(this.settings.seed ^ (this.level * 0x9e3779b1), 2654435761) + this.generation * 7919 + this.trip * 104729) >>> 0;
   }
 
   /**
@@ -297,14 +341,63 @@ export class Simulation {
     this.reset();
   }
 
+  /** This road's theme. */
+  get theme(): HighwayTheme {
+    return themeFor(this.levelSpec.road, this.settings.seed);
+  }
+
+  /** The weather on this level, if it's a road's weather level. */
+  get hazards(): Hazard[] {
+    const h = this.levelSpec.weather ? this.theme.hazard : undefined;
+    return h ? [h] : [];
+  }
+
+  /** Night roads are dark on every level. */
+  get light(): "day" | "night" {
+    return this.theme.night ? "night" : "day";
+  }
+
+  /** Which way the road bends ahead of the car, compared with its heading: -1 to 1, positive is left. */
+  roadAhead(car: Car): number {
+    const want = this.road.heading(car.y - LOOK_AHEAD);
+    const diff = Math.atan2(Math.sin(want - car.angle), Math.cos(want - car.angle));
+    return Math.max(-1, Math.min(1, diff / (Math.PI / 2)));
+  }
+
+  /**
+   * Patches of black ice across the road near `y`, on ice levels. They're placed by position from
+   * the session's seed, so the same stretch of road has the same ice every generation.
+   */
+  iceNear(y: number, range = 400): IcePatch[] {
+    if (!this.hazards.includes("ice")) return [];
+    const out: IcePatch[] = [];
+    const cell = 650;
+    for (let c = Math.floor((-y - range) / cell); c <= Math.floor((-y + range) / cell); c++) {
+      if (c < 1) continue;
+      const h = hash2(c, this.settings.seed, 77);
+      if (h > 0.6) continue;
+      const y0 = -(c * cell + 150 + h * 300);
+      const y1 = y0 - 90;
+      out.push({ a: { x: this.road.centerX(y0), y: y0 }, b: { x: this.road.centerX(y1), y: y1 }, halfWidth: this.road.width / 2 });
+    }
+    return out;
+  }
+
   /** Advances one frame. Returns true when the generation just ended. */
   step(): boolean {
     this.frames++;
     this.course.extend(this.leader.y);
     this.course.update();
     this.trafficTravel += this.course.speed;
+    const hazards = this.hazards;
+    const light = this.light;
+    const condition = roadCondition(hazards);
+    const wet = hazards.includes("rain");
+    const icy = hazards.includes("ice");
     for (const car of this.cars) {
-      car.update(this.road.bordersNear(car.y), this.course.near(car.y), [car.speed / car.maxSpeed]);
+      if (car.sensor) car.sensor.visibility = visibility(car, rayAngles, hazards, light, []);
+      car.grip = wet ? RAIN_GRIP : icy ? (onIce(car, this.iceNear(car.y)) ? ICE_GRIP : SNOW_GRIP) : 1;
+      car.update(this.road.bordersNear(car.y), this.course.near(car.y), [car.speed / car.maxSpeed, this.roadAhead(car), condition]);
       const gained = car.progress - this.trafficTravel;
       if (gained > (this.scores.get(car) ?? 0)) this.scores.set(car, gained);
     }
@@ -324,6 +417,12 @@ export class Simulation {
     this.goalReached = !this.leader.damaged && this.passedBy(this.leader) >= goal;
     const timeUp = this.frames > MAX_GENERATION_FRAMES;
     if (this.alive === 0 || this.framesSinceLeaderGain > LEADER_PATIENCE || this.goalReached || timeUp) {
+      if (this.trip < LAYOUTS_PER_GENERATION - 1) {
+        this.bankTrip();
+        this.trip++;
+        this.spawn();
+        return false;
+      }
       this.nextGeneration();
       return true;
     }
@@ -331,20 +430,31 @@ export class Simulation {
   }
 
   /** Scores every brain, lets NEAT breed the next generation, and unlocks the next level if earned. */
+  /** Adds the layout just driven to every brain's score for the generation. */
+  private bankTrip(): void {
+    this.cars.forEach((c, i) => (this.totals[i] = (this.totals[i] ?? 0) + this.score(c)));
+    if (this.goalReached) this.tripClears++;
+    this.passedThisGeneration = Math.max(this.passedThisGeneration, this.leaderPassed, this.passedBy(this.leader));
+  }
+
+  /** Scores every brain over the generation's layouts (the one under way counts as it stands) and breeds. */
   nextGeneration(): void {
     if (this.mode === "KEYS") return;
+    this.bankTrip();
     const before = this.neat.champion?.hiddenCount ?? 0;
-    this.neat.evolve(this.cars.map((c) => this.score(c)));
+    const layouts = this.trip + 1;
+    this.neat.evolve(this.totals.map((t) => t / layouts));
     const champ = this.neat.champion!;
-    if (this.goalReached) this.clears++;
+    const cleared = this.tripClears > 0;
+    this.clears = Math.min(CLEARS_TO_PASS, this.clears + this.tripClears);
     const levelUp = this.clears >= CLEARS_TO_PASS;
     this.last = {
       generation: this.generation,
       level: this.level,
-      best: this.score(this.leader),
-      passed: Math.max(this.leaderPassed, this.passedBy(this.leader)),
+      best: Math.max(...this.totals) / layouts,
+      passed: this.passedThisGeneration,
       levelUp,
-      cleared: this.goalReached,
+      cleared,
       clears: this.clears,
       neurons: champ.hiddenCount,
       connections: champ.enabledCount,

@@ -1,7 +1,7 @@
 import { describe, expect, it } from "vitest";
 import { getIntersection, mulberry32, polysIntersect } from "../src/utils";
 import { NeuralNetwork } from "../src/network";
-import { levelSpec, Simulation } from "../src/simulation";
+import { LAYOUTS_PER_GENERATION, levelSpec, Simulation } from "../src/simulation";
 import { Genome, Innovations, Neat } from "../src/neat";
 
 describe("geometry", () => {
@@ -91,7 +91,7 @@ describe("simulation", () => {
     expect(sim.course.cars).toHaveLength(7);
     const first = sim.neat.genomes[0];
     expect(first.hiddenCount).toBe(0);
-    expect(first.conns).toHaveLength(32); // 7 rays + speed, x 4 controls
+    expect(first.conns).toHaveLength(40); // 7 rays + speed + road ahead + road condition, x 4 controls
     for (let i = 0; i < 200; i++) sim.step();
     sim.nextGeneration();
     expect(sim.generation).toBe(2);
@@ -101,19 +101,27 @@ describe("simulation", () => {
     expect(JSON.stringify((sim.cars[0].brain as Genome).toJSON())).toBe(JSON.stringify(sim.neat.champion!.toJSON()));
   });
 
-  it("unlocks the next level when the leader reaches the goal", () => {
+  it("unlocks the next level once the goal is reached on three different layouts", () => {
     const sim = new Simulation(0, 210, { population: 1, mutation: 0, seed: 1 });
-    // A level needs its goal on three different layouts.
-    for (let clear = 1; clear <= 3; clear++) {
+    expect(LAYOUTS_PER_GENERATION).toBe(2);
+    // Each generation drives two layouts; every cleared layout counts.
+    const clearLayout = () => {
       const c = sim.cars[0];
       c.brain = undefined;
       c.y = -2000;
-      let ended = false;
-      for (let i = 0; i < 5 && !ended; i++) ended = sim.step();
-      expect(ended).toBe(true);
-      expect(sim.last!.cleared).toBe(true);
-      expect(sim.last!.levelUp).toBe(clear === 3);
-    }
+      const trip = sim.trip;
+      const gen = sim.generation;
+      for (let i = 0; i < 5 && sim.trip === trip && sim.generation === gen; i++) sim.step();
+    };
+    clearLayout();
+    expect(sim.trip).toBe(1); // on to the second layout of the same generation
+    clearLayout();
+    expect(sim.last!.cleared).toBe(true);
+    expect(sim.last!.clears).toBe(2);
+    expect(sim.last!.levelUp).toBe(false);
+    clearLayout();
+    clearLayout();
+    expect(sim.last!.levelUp).toBe(true);
     expect(sim.level).toBe(2);
     expect(sim.course.layout).toBe("endless");
   });
