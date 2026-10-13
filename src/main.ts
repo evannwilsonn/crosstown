@@ -1,6 +1,6 @@
 import "./style.css";
 import { Genome } from "./neat";
-import { LEVELS, Simulation, type SavedState } from "./simulation";
+import { INPUTS, LEVELS, Simulation, type SavedState } from "./simulation";
 import { drawGenome } from "./visualizer";
 import { drawLearningCurve } from "./chart";
 
@@ -58,7 +58,7 @@ function loadState(): SavedState | null {
     localStorage.removeItem(STORAGE_KEY); // earlier versions kept progress forever
     const raw = sessionStorage.getItem(STORAGE_KEY);
     const s = raw ? (JSON.parse(raw) as SavedState) : null;
-    return s?.neat?.inputs === 5 && Array.isArray(s.neat.genomes) && s.neat.genomes.length ? s : null;
+    return s?.neat?.inputs === INPUTS && Array.isArray(s.neat.genomes) && s.neat.genomes.length ? s : null;
   } catch {
     return null;
   }

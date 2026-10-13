@@ -91,7 +91,7 @@ describe("simulation", () => {
     expect(sim.course.cars).toHaveLength(7);
     const first = sim.neat.genomes[0];
     expect(first.hiddenCount).toBe(0);
-    expect(first.conns).toHaveLength(20); // 5 sensors x 4 controls
+    expect(first.conns).toHaveLength(32); // 7 rays + speed, x 4 controls
     for (let i = 0; i < 200; i++) sim.step();
     sim.nextGeneration();
     expect(sim.generation).toBe(2);

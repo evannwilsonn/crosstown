@@ -2,6 +2,7 @@ import { Car } from "./car";
 import { Neat, type NeatJSON } from "./neat";
 import type { NetworkJSON } from "./network";
 import { Road } from "./road";
+import { Sensor } from "./sensor";
 import { TrafficCourse, type TrafficLayout } from "./traffic";
 
 export type DriveMode = "AI" | "KEYS";
@@ -68,8 +69,14 @@ export interface SavedState {
   history?: GenerationSummary[];
 }
 
-/** Ray sensors in, forward / left / right / reverse out. */
-const INPUTS = 5;
+/**
+ * Seven rays fanned across 180 degrees, so the car sees beside itself as well as ahead (cars
+ * cutting in, merges, curves), plus its own speed so it knows how hard it would have to brake.
+ * Forward / left / right / reverse out.
+ */
+export const RAYS = 7;
+export const RAY_SPREAD = Math.PI;
+export const INPUTS = RAYS + 1;
 const OUTPUTS = 4;
 const LEADER_PATIENCE = 420; // frames the leader may go without gaining ground before the generation ends
 /** On the last level a perfect driver never stops, so its generations end after two minutes. */
@@ -129,11 +136,15 @@ export class Simulation {
       speed: spec.trafficSpeed,
     });
     const x = this.road.getLaneCenter(1);
+    const withSensors = (car: Car) => {
+      car.sensor = new Sensor(car, RAYS, 150, RAY_SPREAD);
+      return car;
+    };
     if (this.mode === "KEYS") {
-      this.cars = [new Car(x, 100, 30, 50, "KEYS")];
+      this.cars = [withSensors(new Car(x, 100, 30, 50, "KEYS"))];
     } else {
       this.cars = this.neat.genomes.map((g) => {
-        const car = new Car(x, 100, 30, 50, "AI");
+        const car = withSensors(new Car(x, 100, 30, 50, "AI"));
         car.brain = g;
         return car;
       });
@@ -189,7 +200,7 @@ export class Simulation {
     this.course.update();
     this.trafficTravel += this.course.cars[0]?.speed ?? 0;
     for (const car of this.cars) {
-      car.update(this.road.borders, this.course.near(car.y));
+      car.update(this.road.borders, this.course.near(car.y), [car.speed / car.maxSpeed]);
       const gained = car.progress - this.trafficTravel;
       if (gained > (this.scores.get(car) ?? 0)) this.scores.set(car, gained);
     }
