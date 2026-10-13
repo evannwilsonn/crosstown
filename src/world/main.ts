@@ -5,7 +5,7 @@ import type { MarkingType } from "./markings";
 import { drawMinimap } from "./minimap";
 import { isOsmData, OVERPASS_QUERY, parseOsm } from "./osm";
 import { sampleWorld } from "./sample";
-import { SURVIVE_FRAMES, WORLD_INPUTS, WorldSim, worldLevelSpec, type WorldSaved } from "./sim";
+import { averageMph, SURVIVE_FRAMES, SURVIVE_MIN_MPH, WORLD_INPUTS, WorldSim, worldLevelSpec, type WorldSaved } from "./sim";
 import { drawClosures, drawGround, drawHeadlights, drawIce, drawLamps, drawSea, drawTint, drawWeather } from "./scenery";
 import { CLOSURE_STYLE, HAZARD_HINTS } from "./hazards";
 import { generateMap } from "./mapgen";
@@ -486,7 +486,7 @@ function frame(nowMs: number): void {
     ui.run.textContent = !driving || !sim.followed
       ? "0 m"
       : sim.levelSpec.goal === "survive"
-        ? `${meters(sim.followed.progress)}, ${Math.floor(Math.min(sim.frames, SURVIVE_FRAMES) / 60)}/${SURVIVE_FRAMES / 60} s`
+        ? `${Math.round(averageMph(sim.followed.progress, Math.min(sim.frames, SURVIVE_FRAMES)))}/${SURVIVE_MIN_MPH} mph avg, ${Math.floor(Math.min(sim.frames, SURVIVE_FRAMES) / 60)}/${SURVIVE_FRAMES / 60} s`
         : `${meters(sim.remaining(sim.followed))} to go, ${(sim.frames / 60).toFixed(0)}/${((sim.timeLimit ?? 0) / 60).toFixed(0)} s`;
     ui.levelKicker.textContent = sim.custom ? "Your map" : "Level";
     ui.levelNum.textContent = sim.custom ? "" : String(sim.level);
@@ -538,7 +538,7 @@ function describeLevel(): string {
   }
   const trips = "Three trips from the Start marking to the same target, the red pin, each on the clock; clear it by arriving in time on all three. The GPS points the way; the brain does all the steering.";
   const what: Record<typeof spec.stage, string> = {
-    survive: "keep a car on the road for 45 seconds, covering at least 300 m. Circling in place doesn't count.",
+    survive: `keep a car on the road for 45 seconds while averaging at least ${SURVIVE_MIN_MPH} mph. Parking, crawling or circling in place doesn't count.`,
     easy: spec.map === 0 ? `a first target, close by, on a relaxed clock. ${trips}` : `new streets to learn, so the target is close and the clock relaxed. ${trips}`,
     far: `the target is farther away. ${trips}`,
     tight: `the target is close again, but the clock is tighter. ${trips}`,

@@ -93,7 +93,7 @@ export function worldLevelSpec(n: number): WorldLevel {
   const town = look ? townHazards(look.theme, map) : null;
   const hazards = town ? (stage === "hazard" ? town.alone : stage === "stack" ? town.stacked : []) : [];
   if (stage === "survive") {
-    return { number: level, name: "Stay on the road for 45 s", map, stage, goal: "survive", minTrip: 0, timeFactor: 3, closures: 0, hazards, light };
+    return { number: level, name: `Hold ${SURVIVE_MIN_MPH} mph for 45 s`, map, stage, goal: "survive", minTrip: 0, timeFactor: 3, closures: 0, hazards, light };
   }
   // Each town's base is a notch harder than the last one's.
   const near = 500 + 80 * map;
@@ -163,10 +163,18 @@ const LEADER_PATIENCE = 600;
 /** Level 1 is passed by a car still driving at the time limit. */
 export const SURVIVE_FRAMES = 60 * 45;
 /**
- * Level 1 also needs real ground covered: at least 300 m driven, and at least this far from
- * the start at some point, so a car circling in place can't clear it.
+ * Level 1 asks a car to stay on the road while holding a minimum average speed, so parking or
+ * crawling doesn't count. Cars top out near 40 mph (3 px a frame, 10 px to the metre).
  */
-export const SURVIVE_DISTANCE = 3000;
+export const SURVIVE_MIN_MPH = 20;
+const PX_PER_FRAME_PER_MPH = (0.44704 * 10) / 60;
+/** Ground a car must cover in 45 s to average the minimum speed: about 400 m. */
+export const SURVIVE_DISTANCE = Math.round(SURVIVE_MIN_MPH * PX_PER_FRAME_PER_MPH * SURVIVE_FRAMES);
+/** A car's average speed so far, in mph, from ground covered over frames driven. */
+export function averageMph(px: number, frames: number): number {
+  return frames > 0 ? px / frames / PX_PER_FRAME_PER_MPH : 0;
+}
+/** It must also get at least this far from the start at some point, so circling can't clear it. */
 const SURVIVE_LEAVE_START = 400;
 /** Within this distance of the destination counts as arrived. */
 const ARRIVE_RADIUS = 40;

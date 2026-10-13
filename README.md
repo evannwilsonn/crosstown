@@ -47,7 +47,7 @@ Navigation never steers. The brain has to learn to follow the arrow and stay on 
 
 | Levels | Town | What each level asks |
 | --- | --- | --- |
-| 1-5 | Sample town | 1. Stay on the road for 45 s · 2. A close target, relaxed clock · 3. Farther away · 4. Tighter clock · 5. Far and fast |
+| 1-5 | Sample town | 1. Hold 20 mph for 45 s · 2. A close target, relaxed clock · 3. Farther away · 4. Tighter clock · 5. Far and fast |
 | 6-11 | Downtown | 6. New streets, close target · 7. Farther · 8. Tighter clock · 9. Detours · 10. Pedestrians · 11. Everything at once |
 | 12+ | A new town every six levels | The same six steps with the town's own hazard, each town a notch harder: longer trips, tighter clocks (never below 1.3× the ideal time), and more road closures per trip (1, then 2, then 3) |
 
@@ -69,7 +69,7 @@ Weather closes roads too. On detour levels, snowy towns are blocked by snowdrift
 
 Grip is modelled simply: with less grip the car's direction of travel lags its heading, so it slides through turns, and it accelerates and brakes less.
 
-1. **Staying on the road (level 1)** is the course's challenge. Fitness is distance driven. It's cleared when a car is still driving at 45 s and has covered at least 300 m away from the start, so circling in place doesn't count.
+1. **Staying on the road (level 1)** is the course's challenge. Fitness is distance driven. It's cleared when a car is still driving at 45 s and has averaged at least 20 mph (about 400 m), and has got away from the start, so parking, crawling or circling in place doesn't count. Cars top out near 40 mph.
 2. **Every other level is three timed trips** from the town's Start marking to the same target, the red pin. A level picks its target at random once and keeps it until the level is cleared, so every generation faces the same test. A level is cleared when one brain arrives in time on all three trips. Reset learning picks new targets; a refresh keeps them.
 3. **Detours.** On detour levels, trip 2 closes a street on the route trip 1 would take, and trip 3 keeps that closure and closes another on trip 2's route. Every trip needs a different way to the same target. Closed streets get barricades that the sensors see as walls, and the GPS routes around them. A street is only closed if the target stays reachable and the detour stays reasonable (at most about 1.6 times the direct route, or 90 m more).
 
